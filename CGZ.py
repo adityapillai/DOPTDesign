@@ -344,7 +344,7 @@ def colgen_p(d, k, q, solver = "IPOPT"):
 
     totalTime = time.perf_counter() - start
 
-    subarr_res = [d-1,k,intialVal,optValue,S.shape[1],iter,mosekIter,sparseCount,totalSparse,totalDual,mosekTime,totalIP,totalTime]
+    subarr_res = [d-1,k,intialVal,optValue,S.shape[1],iter,mosekIter,sparseCount,totalSparse,totalPrimal,mosekTime,totalIP,totalTime]
 
     #print(f"initial value {intialVal}, final value {optValue}, iterations {iter}, mosek iterations {mosekIter}, columns {S.shape[1]}")
     #print(f"IP Time  {totalIP}, {solver} TIME {totalPrimal}, MOSEK TIME {mosekTime}")
