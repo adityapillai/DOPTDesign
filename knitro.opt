@@ -1,0 +1,72 @@
+
+# Artelys Knitro 13.2.0 Options file
+# http://www.artelys.com/tools/knitro_doc/
+
+# Which algorithm to use.
+#   auto   = 0 = let Knitro choose the algorithm
+#   direct = 1 = use Interior (barrier) Direct algorithm
+#   cg     = 2 = use Interior (barrier) CG algorithm
+#   active = 3 = use Active Set SLQP algorithm
+#   sqp    = 4 = use Active Set SQP algorithm
+#   multi  = 5 = run multiple algorithms (perhaps in parallel)
+algorithm    direct
+
+# How to compute/approximate the gradient of the objective
+# and constraint functions.
+#   exact        = 1 = user supplies exact first derivatives
+#   forward      = 2 = gradients computed by internal forward finite differences
+#   central      = 3 = gradients computed by internal central finite differences
+#   user_forward = 4 = gradients computed by user-provided forward finite differences
+#   user_central = 5 = gradients computed by user-provided central finite differences
+gradopt      exact
+
+# How to compute/approximate the Hessian of the Lagrangian.
+#   auto            = 0 = determined automatically by Knitro
+#   exact           = 1 = user supplies exact second derivatives
+#   bfgs            = 2 = Knitro computes a dense quasi-Newton BFGS Hessian
+#   sr1             = 3 = Knitro computes a dense quasi-Newton SR1 Hessian
+#   product_findiff = 4 = Knitro computes Hessian-vector products by finite differences
+#   product         = 5 = user supplies exact Hessian-vector products
+#   lbfgs           = 6 = Knitro computes a limited-memory quasi-Newton BFGS Hessian
+hessopt      sr1
+
+# Specifies the verbosity of output.
+#   none         = 0 = nothing
+#   summary      = 1 = only final summary information
+#   iter_10      = 2 = information every 10 iterations is printed
+#   iter         = 3 = information at each iteration is printed
+#   iter_verbose = 4 = more verbose information at each iteration is printed
+#   iter_x       = 5 = in addition, values of solution vector (x) are printed
+#   all          = 6 = in addition, constraints (c) and multipliers (lambda)
+outlev       none
+
+# Declare the problem as convex.
+#   auto       = -1
+#   no         = 0
+#   yes        = 1
+convex            yes
+
+# Specifies the final relative stopping tolerance for the feasibility
+# error. Smaller values of feastol result in a higher degree of accuracy
+# in the solution with respect to feasibility.
+feastol      1e-05
+
+# Specifies the final relative stopping tolerance for the KKT (optimality)
+# error. Smaller values of opttol result in a higher degree of accuracy in
+# the solution with respect to optimality.
+opttol       1e-05
+
+# Maximum number of iterations to allow
+# (if 0 then Knitro determines the best value).
+# Default values are 10000 for NLP and 3000 for MIP.
+maxit        1000
+
+# Whether to perform a derivative check on the model.
+#   none    = 0 = no derivative check
+#   first   = 1 = check first derivatives
+#   second  = 2 = check second derivatives
+#   all     = 3 = check all derivatives
+derivcheck   0
+
+# Specifies the relative tolerance used for the derivative check.
+derivcheck_tol 1e-05
