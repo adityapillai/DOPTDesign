@@ -170,30 +170,27 @@ def colgen_dual(d, k):
     intialVal = 0
 
     #print("starting task")
-    S = newRandomCols(S, int(d*(d-1)))
+    S = newRandomCols(S, d*(d-1))
     cols = S.shape[1]
     #np.append(S, newRandomCols_p(S, 2*utilZ.c2(d), p), axis = 1)
     with mosek.Task() as task:
-        program.dualSetUp(d, k, task)
+        totalDual += program.dualSetUp(d, k, task)
         #print("finished setup")
 
-        dual_time = time.perf_counter()
-        G, nu, value = program.dualAddCols(S, task)
-        totalDual+= time.perf_counter() - dual_time
+        G, nu, value, dual_time = program.dualAddCols(S, task)
+        totalDual +=  dual_time
         intialVal = value
 
         while True:
 
-            ip_time = time.perf_counter()
-            sep = utilZ.quadIP(G)
-            #utilZ.quadIP_p(G, p)
-            currIP = time.perf_counter() - ip_time
-            totalIP+= currIP
+            #ip_time = time.perf_counter()
+            obj_IP, col_IP, ip_time  = utilZ.quadIP(G)
+            totalIP += IP_time
 
 
-            newCol = np.array(sep[-1]).reshape((d,1))
+            newCol = np.array(col_IP).reshape((d,1))
 
-            if utilZ.colExist(S, newCol) or sep[0] <= nu + 10**(-5):
+            if utilZ.colExist(S, newCol) or obj_IP <= nu + 10**(-5):
                 optValue = value
                 break
 
@@ -207,10 +204,9 @@ def colgen_dual(d, k):
             cols += d
             #cols += 1
 
-            dual_time = time.perf_counter()
-            G, nu, value = program.dualAddCols(np.append(newCols, newCol, axis = 1), task)
+            G, nu, value, dual_time = program.dualAddCols(np.append(newCols, newCol, axis = 1), task)
             #
-            totalDual+= time.perf_counter() - dual_time
+            totalDual+= dual_time
             #print(value)
 
             iter += 1
@@ -283,17 +279,14 @@ def colgen_p(d, k, q, solver = "IPOPT"):
 
     while True:
 
-        ip_time = time.perf_counter()
-        sep = utilZ.quadIP(G, onesBound =  q)
-
-        lastIPTime += time.perf_counter() - ip_time
+        obj_IP, col_IP, lastIPTime = utilZ.quadIP(G, onesBound =  q)
         totalIP += lastIPTime
 
         print(f"itearation {iter}: value is {value}, IP Time {lastIPTime}, {currSolver} time {lastSolverTime}")
 
-        newCol = np.array(sep[-1]).reshape((d,1))
+        newCol = np.array(col_IP).reshape((d,1))
 
-        if utilZ.colExist(S, newCol) or sep[0] <= nu + 10**(-5):
+        if utilZ.colExist(S, newCol) or obj_IP <= nu + 10**(-5):
             optValue = value
             break
 
@@ -321,12 +314,11 @@ def colgen_p(d, k, q, solver = "IPOPT"):
             currSolver = "MOSEK"
             mosekIter += 1
             weights = None
-            lastSolverTime = time.perf_counter()
             with mosek.Task() as task:
-                program.dualSetUp(d, k, task)
-                G, nu, value = program.dualAddCols(S, task)
+                lastSolverTime = program.dualSetUp(d, k, task)
+                G, nu, value, dTime = program.dualAddCols(S, task)
+                lastSolverTime += dTime
                 # need primal weights also
-            lastSolverTime = time.perf_counter()- lastSolverTime
             mosekTime += lastSolverTime
 
 
@@ -417,19 +409,16 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
         #print(f"itearation {iter}: value is {value}")
 
         # find a violated column or prove optimality by solving a IP
-        lastIPTime = time.perf_counter()
         # returns two values first is the objective value, second is the 0,1 vectors that the ip found
-        sep = utilZ.quadIP(G, pairs = Pairs)
-
-        lastIPTime = time.perf_counter() - lastIPTime
+        obj_IP, col_IP, lastIPTime = utilZ.quadIP(G, pairs = Pairs)
         totalIP+= lastIPTime
 
-        print(f"itearation {iter}: value is {value}, IP Time {lastIPTime}, {lastSolver} time {lastSolverTime}")
+        print(f"Itearation {iter}: value is {value}, IP Time {lastIPTime}, {lastSolver} time {lastSolverTime}")
 
 
-        newCol = np.array(sep[-1]).reshape((d,1))
+        newCol = np.array(col_IP).reshape((d,1))
 
-        if utilZ.colExist(S, newCol) or sep[0] <= nu + 10**(-5):
+        if utilZ.colExist(S, newCol) or obj_IP <= nu + 10**(-5):
             optValue = value
             break
 
@@ -448,9 +437,6 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
         if not runMosek:
         # compute solution to dual from primal
             v, weights, lastSolverTime = primal_solver(pm.T, k)
-            #pyknitro.run_knitro(pm.T, k)
-            #pyipopt.run_ipopt(pm.T, k)
-            # switch to mosek if increase was too small from prveious iteration
             runMosek = value > 10**(-3) and (-v - value)/value < 0.000001
             #if runMosek:
             #    print("swtiching to mosek")
@@ -464,12 +450,11 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
             lastSolver = "MOSEK"
             mosekIter += 1
             weights = None
-            lastSolverTime = time.perf_counter()
             with mosek.Task() as task:
-                program.dualSetUp(d + len(Pairs), k, task)
-                G, nu, value = program.dualAddCols(pm, task)
+                lastSolverTime = program.dualSetUp(d + len(Pairs), k, task)
+                G, nu, value, dTime = program.dualAddCols(pm, task)
                 # need primal weights also
-            lastSolverTime = time.perf_counter() - lastSolverTime
+            lastSolverTime += dTime
             mosekTime += lastSolverTime
 
 
@@ -574,26 +559,22 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
 
         separator = "Local Search"
 
-        lastIPTime = time.perf_counter()
-        sep = utilZ.localSearch(G, Pairs)
-        lastIPTime = time.perf_counter() - lastIPTime
+        obj_S, col_S, time_S = utilZ.localSearch(G, Pairs)
 
 
         # five percent is threshold for when to use local search versus IP
-        if (sep[0] - target)/target < 0.05:
+        if (obj_S - target)/target < 0.05:
             separator = "IP"
-            ip_time = time.perf_counter()
-            sep = utilZ.quadIP_two(G, Pairs, start = sep[1])
-            lastIPTime = time.perf_counter() - ip_time
-            totalIP += lastIPTime
+            obj_S, col_S, time_S = utilZ.quadIP_two(G, Pairs, start = col_S)
+            totalIP += time_S
 
 
-        print(f"itearation {iter}: value is {value}, {separator} Time {lastIPTime}, {lastSolver} time {lastSolverTime}")
+        print(f"itearation {iter}: value is {value}, {separator} Time {time_S}, {lastSolver} time {lastSolverTime}")
 
 
-        newCol = np.array(sep[-1]).reshape((d,1))
+        newCol = np.array(col_S).reshape((d,1))
 
-        if separator == "IP" and utilZ.colExist(S, newCol) or sep[0] <= nu + 10**(-5):
+        if separator == "IP" and utilZ.colExist(S, newCol) or obj_S <= nu + 10**(-5):
             optValue = value
             break
 
@@ -619,18 +600,17 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
             nu = np.max((pm.T.dot(G)*pm.T).sum(axis=1))
 
             target = nu
-            totalDual += t
+            totalDual += lastSolverTime
         else:
             lastSolver = "MOSEK"
             mosekIter += 1
             weights = None
-            lastSolverTime = time.perf_counter()
             with mosek.Task() as task:
-                program.dualSetUp(d + len(Pairs), k, task)
-                G, nu, value = program.dualAddCols(pm, task)
+                lastSolverTime = program.dualSetUp(d + len(Pairs), k, task)
+                G, nu, value, m_time = program.dualAddCols(pm, task)
+                lastSolverTime += m_time
                 target = nu
 
-            lastSolverTime = time.perf_counter() - lastSolverTime
             mosekTime += lastSolverTime
 
 
