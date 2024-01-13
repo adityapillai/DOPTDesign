@@ -3,6 +3,7 @@ from itertools import chain, combinations
 import math
 import sys
 import numpy as np
+import time
 
 
 def c2(p):
@@ -289,6 +290,8 @@ def getG(barX, d):
 
 def dualAddCols(S, task, keepNo = 0):
 
+    dualTime = time.perf_counter()
+
     inf = math.inf
 
     d = S.shape[0]
@@ -336,7 +339,9 @@ def dualAddCols(S, task, keepNo = 0):
 
     xx = task.getxx(mosek.soltype.itr)
 
-    return getG(barX, d), xx[0] ,task.getprimalobj(mosek.soltype.itr)
+    dualTime = time.perf_counter() - dualTime
+
+    return getG(barX, d), xx[0] ,task.getprimalobj(mosek.soltype.itr), dualTime
 
 
 
@@ -344,6 +349,7 @@ def dualAddCols(S, task, keepNo = 0):
 
 
 def dualSetUp(d, num_vec, task):
+    dualTime = time.perf_counter()
     inf = math.inf
 
     BARVARDIM = [2*d]
@@ -406,6 +412,8 @@ def dualSetUp(d, num_vec, task):
     task.putcj(0, num_vec)
     task.putcfix(-d)
     task.putclist(list(range(1, d + 1)) , d*[-1])
+
+    return dualTime - time.perf_counter()
 
     #print(f"setup with {task.getnumcon()} constraints")
 
