@@ -7,27 +7,7 @@ import random
 import math
 import pyipopt
 import pyknitro
-import csv
-
-
-
-def writeCsvResults(arr_res,type_run):
-
-    # Header row
-    header_row = ["F","s", "Initial Value", "Final Value", "Total Columns", "Iterations","Mosek Iter", "Sparse Iter","Sparse Time", "KNITRO Time", "MOSEK Time", "Gurobi Time","Total Time"]
-
-    # Output CSV file path
-    csv_file_path = "output_"+ str(type_run) + ".csv"
-
-    # Writing to CSV file
-    with open(csv_file_path, mode='w', newline='') as file:
-        writer = csv.writer(file, delimiter=',')
-
-        # Write header row
-        writer.writerow(header_row)
-
-        # Write metadata row
-        writer.writerows(arr_res)
+from collections import defaultdict
 
 
 
@@ -198,7 +178,6 @@ def colgen_dual(d, k):
 
             # d- 1
             newCols = newRandomCols(S, d-1)
-            #newRandomCols_p(S, d-1, p)
             S = np.append(S, newCols, axis = 1)
 
             cols += d
@@ -223,9 +202,16 @@ def colgen_dual(d, k):
 # run column generation where each vector was at most q ones and first coodinate of each vector is 1
 def colgen_p(d, k, q, solver = "IPOPT"):
 
+    info = defaultdict(float)
+    info["F/s"] = (d-1, k)
+    info["Ones Bound"] = q
+    info["Times Sparsified"] = 0
+    info["Mosek Iterations"] = 0
+    #info = {"F/s" : (d-1, k), "Ones Bound" : q }
+    solverKey = f"{solver} Time"
     primal_solver = pyipopt.run_ipopt if solver == "IPOPT" else pyknitro.run_knitro
 
-    start = time.perf_counter()
+    info["Total Time"] = time.perf_counter()
 
     # start with a random solution with non-zero value
     S = np.ones((d, k))
@@ -242,31 +228,22 @@ def colgen_p(d, k, q, solver = "IPOPT"):
     # add d random columns
     newCols = newRandomCols_p(S, d, q)
     optValue = 0
-    cols = S.shape[1]
     iter = 1
     runMosek = False
     mosekIter = 0
 
 
-    # timing and other statistics
-    totalIP = 0
-    totalSparse = 0
-    totalPrimal = 0
-    intialVal = 0
-    sparseCount = 0
-    mosekTime = 0
-    #sp = True
 
     lastIPTime = 0
     currSolver = solver
 
     cols = S.shape[1]
 
+
+
     # solve IPOPT releaxation with initial set of vectors
     v, weights, lastSolverTime = primal_solver(S.T, k)
-    totalPrimal += lastSolverTime
-    #pyipopt.run_ipopt(S.T, k)
-    # pyipopt.run_ipopt(S.T, k)
+    info[solverKey] += lastSolverTime
     value = -v
 
 
@@ -280,9 +257,10 @@ def colgen_p(d, k, q, solver = "IPOPT"):
     while True:
 
         obj_IP, col_IP, lastIPTime = utilZ.quadIP(G, onesBound =  q)
-        totalIP += lastIPTime
+        info["Gurobi Time"] +=  lastIPTime
+        #totalIP += lastIPTime
 
-        print(f"itearation {iter}: value is {value}, IP Time {lastIPTime}, {currSolver} time {lastSolverTime}")
+        #print(f"itearation {iter}: value is {value}, IP Time {lastIPTime}, {currSolver} time {lastSolverTime}")
 
         newCol = np.array(col_IP).reshape((d,1))
 
@@ -302,6 +280,7 @@ def colgen_p(d, k, q, solver = "IPOPT"):
         if not runMosek:
         # compute solution to dual from primal
             v, weights, lastSolverTime = primal_solver(S.T, k)
+            info[solverKey] += lastSolverTime
             # switch to mosek if increase was too small from prveious iteration
             runMosek = (-v - value)/value < 0.000001
 
@@ -309,17 +288,16 @@ def colgen_p(d, k, q, solver = "IPOPT"):
             value = -v
             G = np.linalg.inv(S @ np.diag(weights) @ S.T)
             nu = np.max((S.T.dot(G)*S.T).sum(axis=1))
-            totalPrimal += lastSolverTime
+
         else:
             currSolver = "MOSEK"
-            mosekIter += 1
+            info["Mosek Iterations"] += 1
             weights = None
             with mosek.Task() as task:
                 lastSolverTime = program.dualSetUp(d, k, task)
                 G, nu, value, dTime = program.dualAddCols(S, task)
                 lastSolverTime += dTime
-                # need primal weights also
-            mosekTime += lastSolverTime
+            info["Mosek Time"] +=  lastSolverTime
 
 
         # sparsify if 1 number of rows exceeds threshold and we are not running mosek
@@ -327,28 +305,32 @@ def colgen_p(d, k, q, solver = "IPOPT"):
 
             S, totalPrimal, tS = sparsify_columns(S, k, W = weights)
 
-            sparseCount += 1
-            totalSparse += tS
-            mosekTime += totalPrimal
+            info["Times Sparsified"] += 1
+            info["Sparse Time"] += tS
 
         iter += 1
 
 
-    totalTime = time.perf_counter() - start
+    info["Total Time"] = time.perf_counter() - info["Total Time"]
+    info["Total Iterations"] = iter
+    info["CP Value"] = optValue
 
-    subarr_res = [d-1,k,intialVal,optValue,S.shape[1],iter,mosekIter,sparseCount,totalSparse,totalPrimal,mosekTime,totalIP,totalTime]
 
-    #print(f"initial value {intialVal}, final value {optValue}, iterations {iter}, mosek iterations {mosekIter}, columns {S.shape[1]}")
-    #print(f"IP Time  {totalIP}, {solver} TIME {totalPrimal}, MOSEK TIME {mosekTime}")
-    #print(f"sparsified {sparseCount} times , sparsifying time {totalSparse}")
-    #print(f"total time is {totalTime}")
-    #print(" ")
-
-    return subarr_res
+    return info
 
 # variant for fixed number of pairs with {0, 1} entries for vectors
 def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
-    start = time.perf_counter()
+
+    info = defaultdict(float)
+    info["F/s"] = (d-1, k)
+    info["Pairs"] = Pairs
+    info["Times Sparsified"] = 0
+    info["Mosek Iterations"] = 0
+    #info = {"F/s" : (d-1, k), "Ones Bound" : q }
+    solverKey = f"{solver} Time"
+    primal_solver = pyipopt.run_ipopt if solver == "IPOPT" else pyknitro.run_knitro
+
+    info["Total Time"] = time.perf_counter()
 
     primal_solver = pyipopt.run_ipopt if solver == "IPOPT" else pyknitro.run_knitro
 
@@ -376,13 +358,7 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
     mosekIter = 0
 
 
-    # timing and other statistics
-    totalIP = 0
-    totalSparse = 0
-    totalDual = 0
     intialVal = 0
-    sparseCount = 0
-    mosekTime = 0
     lastIPTime = 0
     lastSolverTime = 0
     #sp = True
@@ -394,6 +370,7 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
     # solve IPOPT releaxation with initial set of vectors
     v, weights, lastSolverTime = primal_solver(pm.T, k)
     value = -v
+    info[solverKey] = lastSolverTime
 
 
     # compute solution to dual from primal
@@ -407,13 +384,10 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
 
     while True:
         #print(f"itearation {iter}: value is {value}")
-
-        # find a violated column or prove optimality by solving a IP
-        # returns two values first is the objective value, second is the 0,1 vectors that the ip found
         obj_IP, col_IP, lastIPTime = utilZ.quadIP(G, pairs = Pairs)
-        totalIP+= lastIPTime
+        info["Gurobi Time"] += lastIPTime
 
-        print(f"Itearation {iter}: value is {value}, IP Time {lastIPTime}, {lastSolver} time {lastSolverTime}")
+        #print(f"Itearation {iter}: value is {value}, IP Time {lastIPTime}, {lastSolver} time {lastSolverTime}")
 
 
         newCol = np.array(col_IP).reshape((d,1))
@@ -438,14 +412,11 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
         # compute solution to dual from primal
             v, weights, lastSolverTime = primal_solver(pm.T, k)
             runMosek = value > 10**(-3) and (-v - value)/value < 0.000001
-            #if runMosek:
-            #    print("swtiching to mosek")
-
             value = -v
             #Q = pm @ np.diag(f(np.maximum(weights, np.zeros(weights.shape[0]))))
             G = np.linalg.inv(pm @ np.diag(weights) @ pm.T)
             nu = np.max((pm.T.dot(G)*pm.T).sum(axis=1))
-            totalDual += lastSolverTime
+            info[solverKey] += lastSolverTime
         else:
             lastSolver = "MOSEK"
             mosekIter += 1
@@ -455,7 +426,8 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
                 G, nu, value, dTime = program.dualAddCols(pm, task)
                 # need primal weights also
             lastSolverTime += dTime
-            mosekTime += lastSolverTime
+            info["Mosek Time"] +=  lastSolverTime
+
 
 
 
@@ -465,24 +437,19 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
             pm, totalPrimal, tS = sparsify_columns(pm, k, W = weights)
             S = pm[0: d , :]
 
+            info["Times Sparsified"] += 1
+            info["Sparse Time"] += tS
 
-            sparseCount += 1
-            totalSparse += tS
-            mosekTime += totalPrimal
 
         iter += 1
 
 
-    totalTime = time.perf_counter() - start
-    subarr_res = [d-1,k,intialVal,optValue,S.shape[1],iter,mosekIter,sparseCount,totalSparse,totalDual,mosekTime,totalIP,totalTime]
+    info["Total Time"] = time.perf_counter()  - info["Total Time"]
+    info["Total Iterations"] = iter
+    info["CP Value"] = optValue
 
-    #print(f"initial value {intialVal}, final value {optValue}, iterations {iter}, mosek iterations {mosekIter}, columns {S.shape[1]}")
-    #print(f"IP Time  {totalIP}, IPOPT TIME {totalDual}, MOSEK TIME {mosekTime}")
-    #print(f"sparsified {sparseCount} times , sparsifying time {totalSparse}")
-    #print(f"total time is {totalTime}")
-    #print(" ")
 
-    return subarr_res
+    return info
 
 # same as colgen_pairs except vectors can take entries in {0, 1, 2}
 def colgen_levels(d, k, Pairs, solver = "IPOPT"):
@@ -654,8 +621,8 @@ if __name__ == "__main__":
 
     #colgen_pairs(d, k, P, solver = "KNITRO")
 
-    #colgen_levels(d, k, P)
-    colgen_p(d, k, d//3)
+    #colgen_levels(d, k, P, solver = "KNITRO")
+    colgen_p(d, k, d//3, solver = "Knitro")
     '''
     for d in range(20,32):
         F = d - 1
