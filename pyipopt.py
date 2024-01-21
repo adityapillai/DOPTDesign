@@ -45,9 +45,9 @@ def run_ipopt(A, s):
 
     constraints = ({'type': 'eq', 'fun': lambda x: np.sum(x) - s})
     bounds = [(0, None)] * n
-    start_time = time.time()
+    start_time = time.perf_counter()
     result = minimize_ipopt(objective, np.ones(n), jac=gradient, constraints=constraints, bounds=bounds, options={'max_iter': 1000, 'tol': 1e-5,'acceptable_tol': 1e-5})
-    elapsed_time = time.time() - start_time
+    elapsed_time = time.perf_counter() - start_time
 
     return result.fun, result.x,elapsed_time
 

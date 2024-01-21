@@ -66,9 +66,9 @@ def run_knitro(A, s):
     cb = KN_add_eval_callback (kc, evalObj = True, funcCallback = callbackEvalF)
     KN_set_cb_grad (kc, cb, objGradIndexVars = KN_DENSE, gradCallback = callbackEvalG)
     KN_set_obj_goal (kc, KN_OBJGOAL_MAXIMIZE)
-    start_time = time.time()
+    start_time = time.perf_counter()
     nStatus = KN_solve (kc)
-    elapsed_time = time.time() - start_time
+    elapsed_time = time.perf_counter() - start_time
     nStatus, objSol, x, lambda_ = KN_get_solution (kc)
     return -objSol, np.array(x),elapsed_time
     
