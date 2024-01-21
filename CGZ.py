@@ -11,24 +11,7 @@ from collections import defaultdict
 
 
 
-def randCol(d):
-    vec = d*[1]
-    for i in range(d):
-        if random.random() > 1/2:
-            vec[i] *= 0
-    return vec
-
-
-def randCol_p(d, p):
-    vec = d*[0]
-    indices = random.sample(range(d), p)
-
-    for i in indices:
-        vec[i] = 1
-
-    return vec
-
-
+# vectorize this function
 
 def newRandomCols(S, n):
 
@@ -36,10 +19,11 @@ def newRandomCols(S, n):
 
     new = np.zeros((0, 0))
     for i in range(n):
-        #rand = randCol(d - 1)
-        col = [1] + randCol(d - 1)
-        while utilZ.colExist(S, np.array(col).reshape(d, 1)):
-            col = [1] + randCol(d-1)
+        col = np.ones((d, 1))
+        col[1:, :] = np.random.randint(low = 0, high = 2, size = (d-1, 1))
+        #[1] + randCol(d - 1)
+        while utilZ.colExist(S, col):
+            col[1:, :] = np.random.randint(low = 0, high = 2, size = (d-1, 1))
         if new.shape[1] > 0:
             new = np.append(new, np.array(col).reshape(d, 1), axis = 1)
         else:
@@ -55,10 +39,10 @@ def newRandomCols_l(S, n):
     new = np.zeros((0, 0))
     for i in range(n):
         col = np.ones((d, 1))
-        col[1:,:] = np.random.randint(low = 0, high = 2, size = (d-1, 1))
+        col[1:,:] = np.random.randint(low = 0, high = 3, size = (d-1, 1))
         #[1] + randCol(d - 1)
         while utilZ.colExist(S, col):
-            col[1:,:] = np.random.randint(low = 0, high = 2, size = (d-1, 1))
+            col[1:,:] = np.random.randint(low = 0, high = 3, size = (d-1, 1))
 
         new = np.append(new, np.array(col).reshape(d, 1), axis = 1) if new.shape[1] > 0 else np.array(col).reshape(d, 1)
 
@@ -68,27 +52,20 @@ def newRandomCols_l(S, n):
 
 # random vectors with at at most p ones, where first coordinate of each vector is 1
 def newRandomCols_p(S, n, p):
+    d, start_cols = S.shape
+    allCols = np.ones((d, 5*n))
+    utilZ.random_p(allCols, p)
 
-    d = S.shape[0]
+    for i in range(allCols.shape[1]):
+        curr = allCols[:, i].reshape((d, 1))
 
-    new = np.zeros((0, 0))
-    for i in range(n):
-        #rand = randCol(d - 1)
-        col = [1] + randCol_p(d - 1, random.randint(0, p- 1))
+        if not utilZ.colExist(S, curr):
+            S = np.append(S,curr, axis = 1)
 
-        attempts = 0
-        while utilZ.colExist(S, np.array(col).reshape(d, 1)) and attempts <= 5:
-            col = [1] + randCol_p(d - 1, random.randint(0, p- 1))
-            attempts += 1
-            #print(col)
-        if new.shape[1] > 0:
-            new = np.append(new, np.array(col).reshape(d, 1), axis = 1)
-        else:
-            new = np.array(col).reshape(d, 1)
-        #print(S)
+        if S.shape[1] - start_cols == n:
+            break
 
-
-    return new
+    return S
 
 
 
@@ -178,7 +155,8 @@ def colgen_dual(d, k):
 
             # d- 1
             newCols = newRandomCols(S, d-1)
-            S = np.append(S, newCols, axis = 1)
+            if newCols.shape[0]:
+                S = np.append(S, newCols, axis = 1)
 
             cols += d
             #cols += 1
@@ -216,10 +194,10 @@ def colgen_p(d, k, q, solver = "IPOPT"):
     # start with a random solution with non-zero value
     S = np.ones((d, k))
 
-    utilZ.random_p(S, d, k, q)
+    utilZ.random_p(S, q)
 
     while np.linalg.det(S @ S.T) < 10**(-5):
-        utilZ.random_p(S, d, k, q)
+        utilZ.random_p(S, q)
 
 
     sparseThrshold = d**2//3
@@ -230,15 +208,11 @@ def colgen_p(d, k, q, solver = "IPOPT"):
     optValue = 0
     iter = 1
     runMosek = False
-    mosekIter = 0
 
 
 
     lastIPTime = 0
     currSolver = solver
-
-    cols = S.shape[1]
-
 
 
     # solve IPOPT releaxation with initial set of vectors
@@ -272,8 +246,8 @@ def colgen_p(d, k, q, solver = "IPOPT"):
 
 
         numRandCols = 2*(d - 1)**2 if runMosek else d-1
-        newCols = newRandomCols_p(S, numRandCols, q)
-        S = np.append(S, newCols, axis = 1)
+        S = newRandomCols_p(S, numRandCols, q)
+
 
         G = 0
 
@@ -400,7 +374,8 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
 
         numRandCols = 2*(d - 1)**2 if runMosek else d - 1
         newCols = newRandomCols(S, numRandCols)
-        S = np.append(S, newCols, axis = 1)
+        if newCols.shape[1]:
+            S = np.append(S, newCols, axis = 1)
 
 
 
@@ -419,7 +394,7 @@ def colgen_pairs(d, k, Pairs, solver = "IPOPT"):
             info[solverKey] += lastSolverTime
         else:
             lastSolver = "MOSEK"
-            mosekIter += 1
+            info["Mosek Iterations"] += 1
             weights = None
             with mosek.Task() as task:
                 lastSolverTime = program.dualSetUp(d + len(Pairs), k, task)
@@ -515,9 +490,6 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
     #max([pm[:, i] @ G @ pm[:, i] for i in range(pm.shape[1])])
 
 
-    target = nu
-
-
     intialVal = value
 
     # last iteration that sparsification was run
@@ -530,13 +502,13 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
 
 
         # five percent is threshold for when to use local search versus IP
-        if (obj_S - target)/target < 0.05:
+        if (obj_S - nu)/nu < 0.001:
             separator = "IP"
             obj_S, col_S, time_S = utilZ.quadIP_two(G, Pairs, start = col_S)
             totalIP += time_S
 
 
-        print(f"itearation {iter}: value is {value}, {separator} Time {time_S}, {lastSolver} time {lastSolverTime}")
+        print(f"Iteration {iter}: value is {value}, {separator} Time {time_S}, {lastSolver} time {lastSolverTime}, target {nu}, {separator} val {obj_S} ")
 
 
         newCol = np.array(col_S).reshape((d,1))
@@ -549,7 +521,8 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
 
         numRandCols = 2*(d - 1)**2 if runMosek else d - 1
         newCols = newRandomCols_l(S, numRandCols)
-        S = np.append(S, newCols, axis = 1)
+        if newCols.shape[1]:
+            S = np.append(S, newCols, axis = 1)
 
 
         pm = utilZ.pairsMat(S, Pairs)
@@ -560,13 +533,12 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
         # compute solution to dual from primal
             v, weights, lastSolverTime = primal_solver(pm.T, k)
             # switch to mosek if increase was too small from previous iteration
-            runMosek = value > 10**(-3) and (-v - value)/value < 0.000001
+            runMosek = value > 10**(-3) and (-v - value)/value < 0.000001 and separator == "IP"
 
             value = -v
             G = np.linalg.inv(pm @ np.diag(weights) @ pm.T)
             nu = np.max((pm.T.dot(G)*pm.T).sum(axis=1))
 
-            target = nu
             totalDual += lastSolverTime
         else:
             lastSolver = "MOSEK"
@@ -576,7 +548,6 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
                 lastSolverTime = program.dualSetUp(d + len(Pairs), k, task)
                 G, nu, value, m_time = program.dualAddCols(pm, task)
                 lastSolverTime += m_time
-                target = nu
 
             mosekTime += lastSolverTime
 
@@ -621,17 +592,5 @@ if __name__ == "__main__":
 
     #colgen_pairs(d, k, P, solver = "KNITRO")
 
-    #colgen_levels(d, k, P, solver = "KNITRO")
-    colgen_p(d, k, d//3, solver = "Knitro")
-    '''
-    for d in range(20,32):
-        F = d - 1
-        k = 2*d
-        q = d//3
-
-        print(f"F: {F}, k: {k}")
-        P = [(1, 3) ,(4, 5), (6, 25), (8, 24)]
-        #colgen_primal_pairs_IPOPT(d, k, P)
-        colgen_primal_levels_IPOPT(d, k, P)
-        print(" ")
-    '''
+    colgen_levels(d, k, P)
+    #colgen_p(d, k, d//3, solver = "Knitro")

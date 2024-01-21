@@ -3,27 +3,23 @@ import numpy as np
 import random
 import sys
 import itertools
+import time
 
 def c2(p):
     return math.comb(p, 2)
 
 
 def colExist(S, newcol):
-
-    for i in range(S.shape[1]):
-        current = S[:, i].reshape((S.shape[0], 1))
-        if np.array_equal(current, newcol):
-            return True
-
-    return False
+    return np.all(newcol == S, axis = 0).any()
 
 
-def random_p(S, d, k, p):
+def random_p(S, p):
+    d,k = S.shape
+    S[1:, :] = 0
+    numOnes = np.random.randint(low = 0, high = p, size = k)
     for j in range(k):
-        indices = random.sample(range(1,d), random.randint(0, p-1))
-        for i in range(1,d):
-            S[i, j] = 1 if i in indices else 0
-
+        rows = np.random.choice(np.arange(1,d), numOnes[j], replace = False)
+        S[rows, j] = 1
     #print(S)
 
 def random_b(S):
@@ -77,23 +73,6 @@ def localMove(pairsS, x, pairs, intitialVal):
     return success, max_val, (allChoices[:, max_idx]).flatten()
 
 
-    '''
-    index = replacement = -1
-    bestVal = intitialVal
-    for i, a, in enumerate(x):
-        if not i: continue
-        for choice in range(3):
-            if choice == a:
-                continue
-            x[i] = choice
-            val = quadFormPairs(pairsS, x, pairs)
-
-            if val > bestVal:
-                index, replacement = i, choice
-            bestVal = max(bestVal, val)
-            x[i] = a
-
-    return index >= 0, index, replacement, bestVal'''
 
 def setStart(m, start, X, B, PB, PX, TB, TX, QB, QX):
     m.params.StartNumber = 0
@@ -137,6 +116,7 @@ def setStart(m, start, X, B, PB, PX, TB, TX, QB, QX):
 
 
 def localSearch(pairsS, P):
+    local_time = time.perf_counter()
     d = pairsS.shape[0] - len(P)
 
 
@@ -162,7 +142,8 @@ def localSearch(pairsS, P):
         x = newVec
 
     #print(f"LS found solution of value {currVal}")
-    return currVal, x
+    local_time = time.perf_counter() - local_time
+    return currVal, x, local_time
 
 
 # let S be a set of vectors in (d, k), meaning columns of S are the vectors in the solution
@@ -207,19 +188,18 @@ def powerset(s):
 # maximize x^T A x for x binary and A symmetric
 # and first coordinate of x is 1
 def quadIP(S, onesBound = None, pairs = []):
+    time_IP = time.perf_counter()
     d = S.shape[0] - len(pairs)
     m = Model()
 
 
 
     ind = [(i, j) for i in range(d) for j in range(i + 1, d)]
-    #C = np.append(S.diagonal(), 2*S[np.triu_indices(d, k = 1)].flatten())
     l = tuplelist(ind)
     X = m.addVars(d, vtype = GRB.BINARY)
     #  obj = S.diagonal()
     # pairs
     P = m.addVars(l, vtype = 'C', lb = 0, ub = 1)
-    # obj =  2*S[np.triu_indices(d, k = 1)].flatten(),
 
     T = []
     Q = []
@@ -231,22 +211,15 @@ def quadIP(S, onesBound = None, pairs = []):
 
 
     m.addConstr(X[0] == 1)
-     # + d*len(P) + c2(d) + c2(len(P))
 
     for i, j in P:
         prodConstraint(m, X[i], X[j], P[i, j])
-        #m.addLConstr(P[i,j] <= X[i])
-        #m.addLConstr(P[i,j] <= X[j])
-        #m.addLConstr(P[i, j] >= X[i] + X[j] - 1)
 
     for i,j,k in T:
         if i == j or i == k:
             m.addLConstr(T[i, j, k] == P[j, k])
         else:
             prodConstraint(m, X[i], P[j, k], T[i, j, k])
-            #m.addLConstr(T[i, j, k] <= X[i])
-            #m.addLConstr(T[i, j, k] <= P[j, k])
-            #m.addLConstr(T[i, j, k] >= X[i] + P[j, k] - 1)
 
     for i,j,k,l in Q:
         if i == k:
@@ -255,9 +228,6 @@ def quadIP(S, onesBound = None, pairs = []):
             m.addLConstr(Q[i, j, k, l] == T[i, k, l])
         else:
             prodConstraint(m, P[i,j], P[k, l], Q[i, j, k, l])
-            #m.addLConstr(Q[i, j, k, l] <= P[i, j])
-            #m.addLConstr(Q[i, j, k, l] <= P[k, l])
-            #m.addLConstr(Q[i, j, k, l] >= P[i, j] +  P[k, l] - 1)
 
 
 
@@ -284,13 +254,14 @@ def quadIP(S, onesBound = None, pairs = []):
     #m.ModelSense = -1
     m.Params.LogToConsole = 0
     m.optimize()
+    time_IP = time.perf_counter() - time_IP
 
     sol = [int(X[j].x) for j in range(d)]
 
-    return [m.getObjective().getValue() ,sol]
+    return m.getObjective().getValue() ,sol, time_IP
 
 def quadIP_two(S, pairs, start = None):
-
+    time_IP = time.perf_counter()
     d = S.shape[0] - len(pairs)
     #print(f"intially dim is {d}")
     m = Model()
@@ -379,10 +350,9 @@ def quadIP_two(S, pairs, start = None):
 
     m.setObjective(obj, GRB.MAXIMIZE)
 
-    #m.Params.LogToConsole = 0
-    #m.Params.Heuristics = 0.2
-    #m.write("a.lp")
+    m.Params.LogToConsole = 0
     m.optimize()
+    time_IP = time.perf_counter() - time_IP
     sol = [X[j].x for j in range(d)]
 
-    return [m.getObjective().getValue() ,sol]
+    return m.getObjective().getValue() ,sol, time_IP
