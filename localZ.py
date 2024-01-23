@@ -45,8 +45,7 @@ def local_move_pairs(S, Pairs):
         Ri = pmi @ pmi.T
         dRi = np.linalg.det(Ri)
 
-        if dRi < 10 ** (-15) or d == k:
-            dRi = 0
+        if dRi < 10 ** (-15): dRi = 0
 
         c = pm[:, i]
         tmp = np.multiply(c, c.reshape(-1, 1))
@@ -59,7 +58,7 @@ def local_move_pairs(S, Pairs):
         # np.array(sol[0]).reshape((d, 1))
 
         norm2 = np.array(sol[1]) @ np.array(sol[1])
-        currentVal = dRi * (1 + newSol) if dRi > 0 else (dS / (c @ c + S[:, i] @ QM @ S[:, i])) * (norm2 + newSol)
+        currentVal = dRi * (1 + newSol) if dRi > 0 else (dS / (c @ c + pm[:, i] @ QM @ pm[:, i])) * (norm2 + newSol)
         #
         # currentVal = dRi*(1 + m.getObjective().getValue())
         if currentVal > maxVal:
@@ -88,6 +87,7 @@ def local_alg_pairs(k, d, Pairs):
     info["Final Value"] = np.log(current_val)
     info["Iterations"] = iterations
     info["Total Time"] = time.perf_counter() - info["Total Time"]
+    print(info)
     return info
 
 
@@ -224,6 +224,7 @@ if __name__ == "__main__":
     d = 15
     k = 2 * d
     q = 5
+    P = [[1, 5]]
 
     # print(local_alg_ob(k, d, q))
-    print(local_alg(k, d))
+    print(local_alg_pairs(k, d, P))
