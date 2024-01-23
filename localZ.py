@@ -33,29 +33,28 @@ def local_move_pairs(S, Pairs):
     # starting point
     pm = utilZ.pairsMat(S, Pairs)
 
-    dS = np.linalg.det(pm @ pm.T)
-    Sinv = np.linalg.inv(pm @ pm.T)
+    pmpm = pm @ pm.T
+
+    dS = np.linalg.det(pmpm)
+    Sinv = np.linalg.inv(pmpm)
 
     # print(S)
     replace_index, addVector, maxVal = 0, 0, 0
     for i in range(k):
-        tmp = remove_Matrix(S, i)
-        pmi = utilZ.pairsMat(tmp, pairs=Pairs)
+        c = pm[:, i].reshape((d + len(Pairs), 1))
+        tmp = c @ c.T
 
-        Ri = pmi @ pmi.T
+        Ri = pmpm - tmp
         dRi = np.linalg.det(Ri)
 
         if dRi < 10 ** (-15): dRi = 0
 
-        c = pm[:, i]
-        tmp = np.multiply(c, c.reshape(-1, 1))
+        c = c.flatten()
         QM = Sinv + (Sinv @ tmp @ Sinv) / (1 - c @ Sinv @ c) if dRi > 0 else -1 * np.linalg.pinv(Ri,
                                                                                                  hermitian=True) @ Ri
 
         sol = utilZ.quadIP(QM, pairs=Pairs)
-
         newSol = sol[0]
-        # np.array(sol[0]).reshape((d, 1))
 
         norm2 = np.array(sol[1]) @ np.array(sol[1])
         currentVal = dRi * (1 + newSol) if dRi > 0 else (dS / (c @ c + pm[:, i] @ QM @ pm[:, i])) * (norm2 + newSol)
@@ -227,4 +226,4 @@ if __name__ == "__main__":
     P = [[1, 5]]
 
     # print(local_alg_ob(k, d, q))
-    print(local_alg_pairs(k, d, P))
+    local_alg_pairs(k, d, P)
