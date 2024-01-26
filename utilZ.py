@@ -14,6 +14,7 @@ def colExist(S, newcol):
     return np.all(newcol == S, axis=0).any()
 
 
+# todo see if this can be made to work on 3d matrices as well
 def random_p(S, p):
     d, k = S.shape
     S[1:, :] = 0
@@ -56,69 +57,38 @@ def quadFormPairs(pairsS, x, pairs):
     return pairsX @ pairsS @ pairsX
 
 
-def localMove(pairsS, x, pairs, intitialVal):
+# pairsS, x, pairs, levels
+def localMove(pairsS, x, pairs, levels):
     d = len(x)
 
-    x_mat = np.tile(x.reshape((d, 1)), (1, d - 1))
     mod_I = np.identity(d)[:, 1:]
 
-    allChoices = np.concatenate([(x_mat + mod_I) % 3, (x_mat + 2 * mod_I) % 3], axis=1)
-    allChoices_pairs = pairsMat(allChoices, pairs)
+    if levels:
+        allChoices = np.concatenate([(x.reshape(-1, 1) + mod_I) % 3, (x.reshape(-1, 1) + 2 * mod_I) % 3], axis=1)
+    else:
+        allChoices = (x.reshape(-1, 1) + mod_I) % 2
+
+    allChoices_pairs = pairsMat(allChoices, pairs) if len(pairs) else allChoices
 
     vals = (allChoices_pairs.T.dot(pairsS) * allChoices_pairs.T).sum(axis=1)
     max_idx = np.argmax(vals)
     max_val = vals[max_idx]
 
-    success = max_val > intitialVal
-
-    return success, max_val, (allChoices[:, max_idx]).flatten()
+    return max_val, (allChoices[:, max_idx]).flatten()
 
 
-def setStart(m, start, X, B, PB, PX, TB, TX, QB, QX):
-    m.params.StartNumber = 0
-    d = len(start)
-
-    b_vals = (2 * d) * [0]
-
-    for i in range(d):
-        if start[i] == 1:
-            b_vals[2 * i] = 1
-        elif start[i] == 2:
-            b_vals[2 * i] = b_vals[2 * i + 1] = 1
-
-    for i in X:
-        X[i].Start = start[i]
-
-    for i in range(2 * d):
-        B[i].Start = b_vals[i]
-
-    for i, j in PB:
-        PB[i, j].Start = b_vals[i] * b_vals[j]
-
-    for i, j in PX:
-        PX[i, j].Start = start[i] * start[j]
-
-    for i, j, k in TB:
-        TB[i, j, k].Start = b_vals[i] * b_vals[j] * b_vals[k]
-
-    for i, j, k in TX:
-        TX[i, j, k].Start = start[i] * start[j] * start[k]
-
-    for i, j, k, l in QB:
-        QB[i, j, k, l].Start = b_vals[i] * b_vals[j] * b_vals[k] * b_vals[l]
-
-    for i, j, k, l in QX:
-        QX[i, j, k, l].Start = start[i] * start[j] * start[k] * start[l]
-
-
-def localSearch(pairsS, P):
+# todo add ones bound local search as well, if a vector maxed # ones swap a 0 and 1 otherwise do the usual local move
+def localSearch(pairsS, P=None, levels=False):
+    if P is None: P = []
     local_time = time.perf_counter()
     d = pairsS.shape[0] - len(P)
 
+    upper = 3 if levels else 2
+
     trials = 100
-    Y = np.random.randint(low=0, high=3, size=(d, trials))
+    Y = np.random.randint(low=0, high=upper, size=(d, trials))
     Y[0, :] = 1
-    Y_pairs = pairsMat(Y, P)
+    Y_pairs = pairsMat(Y, P) if len(P) else Y
 
     # get all y^T pairsS y for all columns y of Y_pairs
     vals = (Y_pairs.T.dot(pairsS) * Y_pairs.T).sum(axis=1)
@@ -127,15 +97,14 @@ def localSearch(pairsS, P):
     currVal = vals[max_idx]
 
     while True:
-        success, val, newVec = localMove(pairsS, x, P, currVal)
+        val, newVec = localMove(pairsS, x, P, levels)
 
-        if not success:
+        if val < currVal + 10 ** (-5):
             break
 
         currVal = val
         x = newVec
 
-    # print(f"LS found solution of value {currVal}")
     local_time = time.perf_counter() - local_time
     return currVal, x, local_time
 
@@ -143,20 +112,13 @@ def localSearch(pairsS, P):
 # let S be a set of vectors in (d, k), meaning columns of S are the vectors in the solution
 
 def sparsify(S, W, k):
-    d = S.shape[0]
-    s = S.shape[1]
+    d, s = S.shape
 
     m = Model()
     m.Params.LogToConsole = 0
 
     newW = m.addVars(s, lb=0, ub=k)
-    # m.addMVar((s,), lb = 0, ub = k)
     m.addLConstr(newW.sum() == k)
-
-    # L = S @ np.diag(W) @ S.T
-    # R = S @ np.diag(newW) @ S.T
-
-    # m.addConstrs(L[i, j] == R[i, j] for i in range(d) for j in range(i, d))
 
     for i in range(d):
         for j in range(i, d):
@@ -170,16 +132,10 @@ def sparsify(S, W, k):
     return [newW[i].x for i in range(s)] if m.status == GRB.OPTIMAL else []
 
 
-def powerset(s):
-    x = len(s)
-    masks = [1 << i for i in range(x)]
-    for i in range(1 << x):
-        yield [ss for mask, ss in zip(masks, s) if i & mask]
-
-
 # maximize x^T A x for x binary and A symmetric
 # and first coordinate of x is 1
-def quadIP(S, onesBound=None, pairs=[]):
+def quadIP(S, onesBound=None, pairs=None, start=None):
+    if pairs is None: pairs = []
     time_IP = time.perf_counter()
     d = S.shape[0] - len(pairs)
     m = Model()
@@ -236,6 +192,10 @@ def quadIP(S, onesBound=None, pairs=[]):
 
     if onesBound is not None:
         m.addLConstr(X.sum() <= onesBound)
+    if start is not None:
+        m.params.StartNumber = 0
+        set_start(start, X, P, T, Q)
+
     # m.ModelSense = -1
     m.Params.LogToConsole = 0
     m.optimize()
@@ -244,6 +204,57 @@ def quadIP(S, onesBound=None, pairs=[]):
     sol = [int(X[j].x) for j in range(d)]
 
     return m.getObjective().getValue(), sol, time_IP
+
+
+def set_start(start, X, P, T, Q):
+    for i in X:
+        X[i].Start = start[i]
+
+    for i, j in P:
+        P[i, j].Start = start[i] * start[j]
+
+    for i, j, k in T:
+        T[i, j, k] = start[i] * start[j] * start[k]
+
+    for i, j, k, l in Q:
+        Q[i, j, k, l] = start[i] * start[j] * start[k] * start[l]
+
+
+def set_start_two(m, start, X, B, PB, PX, TB, TX, QB, QX):
+    m.params.StartNumber = 0
+    d = len(start)
+
+    b_vals = (2 * d) * [0]
+
+    for i in range(d):
+        if start[i] == 1:
+            b_vals[2 * i] = 1
+        elif start[i] == 2:
+            b_vals[2 * i] = b_vals[2 * i + 1] = 1
+
+    for i in X:
+        X[i].Start = start[i]
+
+    for i in range(2 * d):
+        B[i].Start = b_vals[i]
+
+    for i, j in PB:
+        PB[i, j].Start = b_vals[i] * b_vals[j]
+
+    for i, j in PX:
+        PX[i, j].Start = start[i] * start[j]
+
+    for i, j, k in TB:
+        TB[i, j, k].Start = b_vals[i] * b_vals[j] * b_vals[k]
+
+    for i, j, k in TX:
+        TX[i, j, k].Start = start[i] * start[j] * start[k]
+
+    for i, j, k, l in QB:
+        QB[i, j, k, l].Start = b_vals[i] * b_vals[j] * b_vals[k] * b_vals[l]
+
+    for i, j, k, l in QX:
+        QX[i, j, k, l].Start = start[i] * start[j] * start[k] * start[l]
 
 
 def quadIP_two(S, pairs, start=None):
@@ -313,7 +324,7 @@ def quadIP_two(S, pairs, start=None):
 
     # start = localSearch(S, pairs)
     if start is not None:
-        setStart(m, start, X, B, PB, PX, TB, TX, QB, QX)
+        set_start_two(m, start, X, B, PB, PX, TB, TX, QB, QX)
 
     obj = S.diagonal() @ np.array([PX[i, i] for i in range(d)] + [QX[i, j, i, j] for i, j in pairs]) + quicksum(
         [2 * PX[i, j] * S[i, j] for i, j in PX if i != j])
@@ -333,6 +344,6 @@ def quadIP_two(S, pairs, start=None):
 
     m.Params.LogToConsole = 0
     m.optimize()
-    sol = [X[j].x for j in range(d)]
+    sol = [int(X[j].x) for j in range(d)]
 
     return m.getObjective().getValue(), sol, time.perf_counter() - time_IP
