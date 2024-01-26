@@ -18,7 +18,8 @@ def best_starting_sol(arr_s):
 def general_local_alg(S, current_val, local_move_fun):
     iterations = 0
     while True:
-        new_val, replace_index, new_vec = local_move_fun(S)
+        new_val, replace_index, new_vec = local_move_fun(S, current_val)
+        print(f"Value at {np.log(new_val)}")
         iterations += 1
         if new_val - current_val < 10 ** (-5):
             break
@@ -28,7 +29,7 @@ def general_local_alg(S, current_val, local_move_fun):
     return current_val, iterations
 
 
-def local_move_pairs(S, Pairs):
+def local_move_pairs(S, Pairs, old_val):
     d, k = S.shape
     # starting point
     pm = utilZ.pairsMat(S, Pairs)
@@ -78,8 +79,8 @@ def local_alg_pairs(k, d, Pairs):
     current_val, max_idx = best_starting_sol(arr_s_pairs)
     S = arr_s[max_idx]
 
-    def local_pairs_fun(S):
-        return local_move_pairs(S, Pairs)
+    def local_pairs_fun(S, old_val):
+        return local_move_pairs(S, Pairs, old_val)
 
     current_val, iterations = general_local_alg(S, current_val, local_pairs_fun)
 
@@ -90,132 +91,87 @@ def local_alg_pairs(k, d, Pairs):
     return info
 
 
-def local_move(S):
+def local_move(S, prev_value, ones_bound):
     d, k = S.shape
-    # starting point
     SS = S @ S.T
     dS = np.linalg.det(SS)
-    Sinv = np.linalg.inv(SS)
+    S_inv = np.linalg.inv(SS)
 
-    # print(S)
+    denominators = 1 - (S.T.dot(S_inv) * S.T).sum(axis=1)
     replace_index, add_vector, max_val = 0, 0, 0
+    ip_inputs = []
     for i in range(k):
-        c = S[:, i].reshape((d, 1))
+        c = S[:, i].reshape(-1, 1)
         tmp = c @ c.T
 
         Ri = SS - tmp
-        dRi = np.linalg.det(Ri)
-
-        if dRi < 10 ** (-15) or d == k:
-            dRi = 0
+        dRi = np.linalg.det(Ri) if denominators[i] > 10 ** (-3) else 0
 
         c = c.flatten()
-        QM = Sinv + (Sinv @ tmp @ Sinv) / (1 - c @ Sinv @ c) if dRi > 0 else -1 * np.linalg.pinv(Ri,
-                                                                                                 hermitian=True) @ Ri
+        QM = S_inv + (S_inv @ tmp @ S_inv) / denominators[i] if dRi else -np.linalg.pinv(Ri, hermitian=True) @ Ri
 
-        sol = utilZ.quadIP(QM)
-        sol_val = sol[0]
+        if not dRi or ones_bound is not None:
+            ip_inputs.append((QM, 0, None))
+            continue
 
-        norm2 = np.array(sol[1]) @ np.array(sol[1])
-        current_val = dRi * (1 + sol_val) if dRi > 0 else (dS / (c @ c + S[:, i] @ QM @ S[:, i])) * (norm2 + sol_val)
+        # use local first if all of them fail then solve IP
+        sol_val, vec, t = utilZ.localSearch(QM)
+        ip_inputs.append((QM, dRi, vec))
+
+        norm2 = np.array(vec) @ np.array(vec)
+        current_val = dRi * (1 + sol_val) if dRi else (dS / (c @ c + c @ QM @ c)) * (norm2 + sol_val)
+
         if current_val > max_val:
             replace_index = i
-            add_vector = sol[1]
+            add_vector = vec
+            max_val = current_val
+
+    if max_val > prev_value:
+        return max_val, replace_index, add_vector
+
+    for i in range(k):
+        QM, dRi, vec = ip_inputs[i]
+        sol_val, vec, t = utilZ.quadIP(QM, start=vec, onesBound=ones_bound)
+
+        c = S[:, i]
+        norm2 = np.array(vec) @ np.array(vec)
+        current_val = dRi * (1 + sol_val) if dRi else (dS / (c @ c + c @ QM @ c)) * (norm2 + sol_val)
+
+        if current_val > max_val:
+            replace_index = i
+            add_vector = vec
             max_val = current_val
 
     return max_val, replace_index, add_vector
 
 
-def local_alg(k, d):
+def local_alg(k, d, ones_bound=None):
     info = {"F/s": (d - 1, k), "Total Time": time.perf_counter()}
 
     trials = 50
     arr_s = np.ones((trials, d, k))
 
-    utilZ.random_b(arr_s)
+    if ones_bound is None:
+        utilZ.random_b(arr_s)
+    else:
+        for S in arr_s: utilZ.random_p(S, ones_bound)
+        info["Ones Bound"] = ones_bound
+
     current_val, max_idx = best_starting_sol(arr_s)
     S = arr_s[max_idx]
 
-    current_val, iterations = general_local_alg(S, current_val, local_move)
+    # could not find a non-zero starting solution
+    # if current_val < 10 ** (-3):
+    #    return None
+
+    def local_move_curr(S, old_value):
+        return local_move(S, old_value, ones_bound)
+
+    print(f"Random found {np.log(current_val)}")
+    current_val, iterations = general_local_alg(S, current_val, local_move_curr)
 
     info["Total Time"] = time.perf_counter() - info["Total Time"]
     info["Iterations"] = iterations
-    return info
-
-
-def local_move_ob(S, q):
-    scale = False
-    d, k = S.shape
-    SS = S @ S.T
-    dS = np.linalg.det(SS)
-    # Sinv = np.linalg.inv(SS)
-
-    SD = np.linalg.pinv(SS, hermitian=True)
-
-    replace_index, add_vector, max_val = 0, 0, 0
-    for i in range(k):
-        c = S[:, i].reshape((d, 1))
-        tmp = c @ c.T
-        Ri = SS - tmp
-        c = c.flatten()
-        # if scale:
-        #    Ri = Ri / d
-        # print(Ri)
-        # print(remove_Matrix(S, d, k, i))
-        inv = True
-        dRi = np.linalg.det(Ri)
-
-        # if scale:
-        #    dRi
-
-        # do new few lines in a cleaner way
-        try:
-            QM = np.linalg.inv(Ri)
-        except np.linalg.LinAlgError as err:
-            dRi = 0
-            inv = False
-            QM = -1 * np.linalg.pinv(Ri, hermitian=True) @ Ri
-
-        sol = utilZ.quadIP(QM, onesBound=q)
-
-        new_sol = sol[0] / d if scale else sol[0]
-        new_sol = max(0, new_sol) if inv else new_sol
-
-        # if new_sol < 0 and inv:
-        #    print(new_sol)
-
-        d2 = (SD @ c).T @ (SD @ c)
-
-        current_val = dRi * (1 + new_sol) if inv else (dS * d2) * (q + new_sol)
-
-        if current_val > max_val + 10 ** (-5):
-            replace_index = i
-            add_vector = sol[1]
-            max_val = current_val
-
-    return max_val, replace_index, add_vector
-
-
-def local_alg_ob(k, d, q):
-    info = {"F/s": (d - 1, k), "Ones Bound": q, "Total Time": time.perf_counter(), "Iterations": 0}
-
-    # get 50 random solutions and start with the best
-    trials = 50
-    arr_s = np.ones((trials, d, k))
-
-    for S in arr_s:
-        utilZ.random_p(S, q)
-
-    current_val, max_idx = best_starting_sol(arr_s)
-    S = arr_s[max_idx]
-
-    def local_move_ob_fun(S):
-        return local_move_ob(S, q)
-
-    currentVal, iterations = general_local_alg(S, current_val, local_move_ob_fun)
-
-    info["Total Time"] = time.perf_counter() - info["Total Time"]
-    info["Final Value"] = np.log(currentVal)
     return info
 
 
@@ -226,4 +182,5 @@ if __name__ == "__main__":
     P = [[1, 5]]
 
     # print(local_alg_ob(k, d, q))
-    local_alg_pairs(k, d, P)
+    # local_alg_pairs(k, d, P)
+    local_alg(52, 26, ones_bound=26 // 3)
