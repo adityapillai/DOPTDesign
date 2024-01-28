@@ -1,13 +1,8 @@
 from gurobipy import *
 import numpy as np
-import random
-import sys
-import itertools
 import time
 
-
-def c2(p):
-    return math.comb(p, 2)
+import utilZ
 
 
 def colExist(S, newcol):
@@ -58,10 +53,15 @@ def quadFormPairs(pairsS, x, pairs):
 
 
 # pairsS, x, pairs, levels
-def localMove(pairsS, x, pairs, levels):
+def localMove(pairsS, x, pairs, levels, ones_bound):
     d = len(x)
 
     mod_I = np.identity(d)[:, 1:]
+
+    # todo possibly add to mod_I columns with two ones corresponding ot places where there is a 1 and 0
+    if ones_bound is not None and x.sum() == ones_bound:
+        indices = np.where(x[1:] == 0)[0]
+        mod_I = np.delete(mod_I, indices, axis=1)
 
     if levels:
         allChoices = np.concatenate([(x.reshape(-1, 1) + mod_I) % 3, (x.reshape(-1, 1) + 2 * mod_I) % 3], axis=1)
@@ -77,8 +77,7 @@ def localMove(pairsS, x, pairs, levels):
     return max_val, (allChoices[:, max_idx]).flatten()
 
 
-# todo add ones bound local search as well, if a vector maxed # ones swap a 0 and 1 otherwise do the usual local move
-def localSearch(pairsS, P=None, levels=False):
+def localSearch(pairsS, P=None, levels=False, ones_bound=None):
     if P is None: P = []
     local_time = time.perf_counter()
     d = pairsS.shape[0] - len(P)
@@ -88,16 +87,19 @@ def localSearch(pairsS, P=None, levels=False):
     trials = 100
     Y = np.random.randint(low=0, high=upper, size=(d, trials))
     Y[0, :] = 1
+    if ones_bound is not None:
+        utilZ.random_p(Y, ones_bound)
+
     Y_pairs = pairsMat(Y, P) if len(P) else Y
 
     # get all y^T pairsS y for all columns y of Y_pairs
     vals = (Y_pairs.T.dot(pairsS) * Y_pairs.T).sum(axis=1)
     max_idx = np.argmax(vals)
-    x = Y[:, max_idx].flatten()
+    x = Y[:, max_idx].ravel()
     currVal = vals[max_idx]
 
     while True:
-        val, newVec = localMove(pairsS, x, P, levels)
+        val, newVec = localMove(pairsS, x, P, levels, ones_bound)
 
         if val < currVal + 10 ** (-5):
             break
@@ -201,7 +203,7 @@ def quadIP(S, onesBound=None, pairs=None, start=None):
     m.optimize()
     time_IP = time.perf_counter() - time_IP
 
-    sol = [int(X[j].x) for j in range(d)]
+    sol = np.array([int(X[j].x) for j in range(d)])
 
     return m.getObjective().getValue(), sol, time_IP
 
@@ -344,6 +346,6 @@ def quadIP_two(S, pairs, start=None):
 
     m.Params.LogToConsole = 0
     m.optimize()
-    sol = [int(X[j].x) for j in range(d)]
+    sol = np.array([int(X[j].x) for j in range(d)])
 
     return m.getObjective().getValue(), sol, time.perf_counter() - time_IP
