@@ -1,3 +1,5 @@
+# import os
+# os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 import utilZ
 import program
 import numpy as np
@@ -7,6 +9,8 @@ import random
 import math
 import pyipopt
 import pyknitro
+import pybaron
+import itertools
 from collections import defaultdict
 
 
@@ -581,16 +585,179 @@ def colgen_levels(d, k, Pairs, solver = "IPOPT"):
     return subarr_res
 
 
+def colgen_quad(F,d, k, Pairs, solver = "IPOPT"):
+    start = time.perf_counter()
+    info = defaultdict(float)
+    info["F/s"] = (F, k)
+    info["Pairs"] = Pairs
+    info["Times Sparsified"] = 0
+    info["Mosek Iterations"] = 0
+    #info = {"F/s" : (d-1, k), "Ones Bound" : q }
+    solverKey = f"{solver} Time"
+    info["Total Time"] = time.perf_counter()
+
+    primal_solver = pyipopt.run_ipopt if solver == "IPOPT" else pyknitro.run_knitro
+
+    model,opt = pybaron.getPyomoModelBARON(F,d,Pairs)
+    # it is important to have an initial feasible submatrix in here 
+    # because it is harder to get a nonsingular submatrix with random cols
+    # start with a random solution with non-zero value
+    S = np.ones((F+1, k))
+    utilZ.random_l(S)
+    # Q is the submatrix for the quadratic model
+    Q = utilZ.genMatrixQuadModel(S,F,d,Pairs)
+    while np.linalg.det(Q @ Q.T) < 10**(-5):
+        utilZ.random_l(S)
+        Q = utilZ.genMatrixQuadModel(S,F,d,Pairs)
+
+    # add d random columns
+    newCols = newRandomCols_l(S,F+1)
+    optValue = 0
+    cols = S.shape[1]
+    iter = 1
+    runMosek = False
+    mosekIter = 0
+    # timing and other statistics
+    totalIP = 0
+    totalSparse = 0
+    totalDual = 0
+    intialVal = 0
+    sparseCount = 0
+    mosekTime = 0
+    #sp = True
+
+    lastIPTime = 0
+    lastSolverTime = 0
+    lastSolver = solver
+
+    cols = S.shape[1]
+
+    Q = utilZ.genMatrixQuadModel(S,F,d,Pairs)
+    # solve IPOPT releaxation with initial set of vectors
+    v, weights, t = primal_solver(Q.T, k)
+    #pyipopt.run_ipopt(pm.T, k)
+    lastSolverTime = t
+    # pyipopt.run_ipopt(S.T, k)
+    value = -v
+    totalDual += t
+
+
+    # compute feasible solution to dual from primal
+    G = np.linalg.inv(Q @ np.diag(weights) @ Q.T)
+
+    nu = np.max((Q.T.dot(G)*Q.T).sum(axis=1))
+    intialVal = value
+
+    # last iteration that sparsification was run
+    while True:
+
+        # separator = "Local Search"
+
+        # obj_S, col_S, time_S = utilZ.localSearch(G, Pairs)
+
+
+        # # five percent is threshold for when to use local search versus IP
+        # if (obj_S - nu)/nu < 0.001:
+        #     separator = "IP"
+        #     obj_S, col_S, time_S = utilZ.quadIP_two(G, Pairs, start = col_S)
+        #     totalIP += time_S
+
+        separator = "IP"
+        obj_S, col_S, time_S = pybaron.runBARON(G,F,d,model,opt)
+        totalIP += time_S
+
+
+        print(f"Iteration {iter}: value is {value}, {separator} Time {time_S}, {lastSolver} time {lastSolverTime}, target {nu}, {separator} val {obj_S} ")
+
+
+        # newCol = np.array(col_S).reshape((d,1))
+
+        if separator == "IP" and utilZ.colExist(S, col_S) or obj_S <= nu + 10**(-5):
+            optValue = value
+            break
+        # print(S.shape)
+        # print(col_S.shape)
+        # col_S = np.array(col_S).reshape((F+1,1))
+        S = np.append(S,col_S, axis = 1)
+
+        # numRandCols = 2*(d - 1)**2 if runMosek else d - 1
+        numRandCols = F
+        newCols = newRandomCols_l(S, numRandCols)
+        if newCols.shape[1]:
+            S = np.append(S, newCols, axis = 1)
+
+
+        Q = utilZ.genMatrixQuadModel(S,F,d,Pairs)
+        G = 0
+
+        if not runMosek:
+        # compute solution to dual from primal
+            v, weights, lastSolverTime = primal_solver(Q.T, k)
+            # switch to mosek if increase was too small from previous iteration
+            runMosek = value > 10**(-3) and (-v - value)/value < 0.000001 and separator == "IP"
+
+            value = -v
+            G = np.linalg.inv(Q @ np.diag(weights) @ Q.T)
+            nu = np.max((Q.T.dot(G)*Q.T).sum(axis=1))
+
+            totalDual += lastSolverTime
+        else:
+            lastSolver = "MOSEK"
+            mosekIter += 1
+            weights = None
+            with mosek.Task() as task:
+                lastSolverTime = program.dualSetUp(d, k, task)
+                G, nu, value, m_time = program.dualAddCols(Q, task)
+                lastSolverTime += m_time
+
+            mosekTime += lastSolverTime
+
+
+        # sparsify if number of rows exceeds threshold and we are not running mosek
+        # if not runMosek and S.shape[1] > sparseThrshold:
+
+        #     pm, totalPrimal, tS = sparsify_columns(pm, k, W = weights)
+        #     S = pm[0: d , :]
+
+
+        #     sparseCount += 1
+        #     totalSparse += tS
+        #     lastSparse = iter
+        #     mosekTime += totalPrimal
+
+        iter += 1
+
+
+    totalTime = time.perf_counter() - start
+
+    subarr_res = [d-1,k,intialVal,optValue,S.shape[1],iter,mosekIter,sparseCount,totalSparse,totalDual,mosekTime,totalIP,totalTime]
+    print(f"initial value {intialVal}, final value {optValue}, iterations {iter}, mosek iterations {mosekIter}, columns {S.shape[1]}")
+    print(f"IP Time  {totalIP}, IPOPT TIME {totalDual}, MOSEK TIME {mosekTime}")
+    print(f"sparsified {sparseCount} times , sparsifying time {totalSparse}")
+    print(f"total time is {totalTime}")
+    print(" ")
+
+
+
+    return subarr_res
+
+
 
 
 if __name__ == "__main__":
 
-    P = [(1, 3) ,(4, 5), (6, 14), (8, 17)]
-    d = 25
-    F = d - 1
+    # P = [(1, 3) ,(4, 5), (6, 14), (8, 17)]
+    F = 5
+    P = list(itertools.combinations(range(F), 2))
+    lenPairs = len(P) 
+    d = 2*F + lenPairs + 1
+    # d = 25
+    
     k = 2*d
 
-    #colgen_pairs(d, k, P, solver = "KNITRO")
+    colgen_quad(F,d, k, P, solver = "KNITRO")
+    # colgen_pairs(d, k, P, solver = "KNITRO")
 
-    colgen_levels(d, k, P)
+    # colgen_levels(d, k, P)
     #colgen_p(d, k, d//3, solver = "Knitro")
+

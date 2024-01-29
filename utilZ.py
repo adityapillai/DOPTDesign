@@ -22,6 +22,13 @@ def random_p(S, p):
         rows = np.random.choice(np.arange(1, d), numOnes[j], replace=False)
         S[rows, j] = 1
 
+def random_quad(S, p):
+    d, k = S.shape
+    S[1:, :] = 0
+    numOnes = np.random.randint(low=0, high=p, size=k)
+    for j in range(k):
+        rows = np.random.choice(np.arange(1, d), numOnes[j], replace=False)
+        S[rows, j] = np.random.randint(low=1,high=3,size=len(rows))
 
 def random_b(S):
     if S.ndim > 2:
@@ -250,6 +257,7 @@ def quadIP_two(S, pairs, start=None):
     time_IP = time.perf_counter()
     d = S.shape[0] - len(pairs)
     # print(f"intially dim is {d}")
+
     m = Model()
 
     X = m.addVars(d, vtype='C', lb=0, ub=2)
@@ -336,3 +344,29 @@ def quadIP_two(S, pairs, start=None):
     sol = [X[j].x for j in range(d)]
 
     return m.getObjective().getValue(), sol, time.perf_counter() - time_IP
+
+
+
+# Quadratic model
+
+def genColQuadModel(F,m,pairs,col_s): # We can make this more efficient
+    col_quad = np.zeros(m)
+    for i in range(2*F + 1):
+        if i <= F:
+            col_quad[i] = col_s[i]
+        else:
+            col_quad[i] = col_s[i-F]**2
+    count_pair = 2*F
+    for (i,j) in pairs:
+        count_pair += 1
+        col_quad[count_pair] = col_s[i+1]*col_s[j+1]
+    return col_quad
+
+
+def genMatrixQuadModel(S,F,m,pairs): # We can make this more efficient
+    nCols = S.shape[1]
+    Q = np.zeros((m,nCols))
+    for i in range(nCols):
+        Q[:,i] = genColQuadModel(F,m,pairs,S[:,i])
+    return Q
+        
