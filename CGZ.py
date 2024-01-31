@@ -18,7 +18,7 @@ def new_random_cols_general(S, n, fun):
     for i in range(allCols.shape[1]):
         curr = allCols[:, i].reshape(-1, 1)
 
-        if not utilZ.colExist(S, curr):
+        if not utilZ.col_exist(S, curr):
             S = np.append(S, curr, axis=1)
 
         if S.shape[1] - start_cols == n:
@@ -48,8 +48,6 @@ def sparsify_columns(S, k, W=None):
 
     if W is None:
         with mosek.Task() as task2:
-            prevSize = S.shape[1]
-
             t = time.perf_counter()
             program.primalSetup(d, k, task2)
             val2, W = program.primaladdCols(S, k, task2)
@@ -59,7 +57,7 @@ def sparsify_columns(S, k, W=None):
     sparseW = utilZ.sparsify(S, W, k)
     totalSparse += time.perf_counter() - t
 
-    if len(sparseW) > 0:
+    if len(sparseW):
         remove = [i for i in range(S.shape[1]) if sparseW[i] < 10 ** (-3)]
         S = np.delete(S, remove, 1)
 
@@ -98,7 +96,7 @@ def colgen_dual(d, k):
 
             newCol = col_IP.reshape(-1, 1)
 
-            if utilZ.colExist(S, newCol) or obj_IP <= nu + 10 ** (-5):
+            if utilZ.col_exist(S, newCol) or obj_IP <= nu + 10 ** (-5):
                 break
 
             prev_size = S.shape[1]
@@ -127,13 +125,17 @@ def colgen_pairs(d, k, pairs, levels=False, solver="IPOPT"):
         primal_solver_ones = partial(pyknitro.run_knitro, s=k)
 
     starter_fun = utilZ.random_l if levels else utilZ.random_b
-    S = np.ones((d, k))
 
-    starter_fun(S)
-    S_mat = apply_pairs(S)
-    while np.linalg.det(S_mat @ S_mat.T) < 10 ** (-5):
-        starter_fun(S)
-        S_mat = apply_pairs(S)
+    trials = 50
+    arr_s = np.ones((trials, d, k))
+    starter_fun(arr_s)
+
+    val, idx = utilZ.best_starting_sol(np.array([apply_pairs(S) for S in arr_s]))
+    S = arr_s[idx]
+
+    if val < 10 ** (-5):
+        logging.error(f"Could not find non-zero solution in {trials} random solutions")
+        return None
 
     stats = colgen_general(S, apply_pairs, heuristic_ones, ip_func, rand_func, primal_solver_ones)
 
@@ -160,12 +162,20 @@ def colgen_ones_bound(d, k, ones_bound, solver="IPOPT"):
         primal_solver_ones = partial(pyknitro.run_knitro, s=k)
 
     # get a non-zero starting solution
-    # todo change to get
-    S = np.ones((d, k))
-    utilZ.random_p(S, ones_bound)
-    while np.linalg.det(S @ S.T) < 10 ** (-5):
+    # todo change to get best of 50 random, log error and return
+    trials = 50
+    arr_s = np.ones((trials, d, k))
+    for S in arr_s:
         utilZ.random_p(S, ones_bound)
 
+    val, idx = utilZ.best_starting_sol(arr_s)
+    S = arr_s[idx]
+
+    if val < 10 ** (-5):
+        logging.error(f"Could not find non-zero starting solution among {trials} random solutions")
+        return None
+
+    logging.debug(f"Starting with a solution with det {val}")
     stats = colgen_general(S, apply_pairs, heuristic_ones, ip_ones, rand_func_ones, primal_solver_ones)
 
     # print(info)
@@ -174,7 +184,7 @@ def colgen_ones_bound(d, k, ones_bound, solver="IPOPT"):
     return info
 
 
-# todo update general function to use logging info for each iteration, make heuristic_fun optional since not necessary
+# todo maybe? make heuristic_fun optional since not necessary
 def colgen_general(S, apply_pairs, heuristic_fun, ip_func, new_rand_cols, primal_solver):
     d, k = S.shape
     info = defaultdict(float)
@@ -212,12 +222,12 @@ def colgen_general(S, apply_pairs, heuristic_fun, ip_func, new_rand_cols, primal
         logging.info(
             f"Iteration {iter}: Value {value:.5f}, {separator} time {time_sep}, {curr_solver} time {lastSolverTime:.2f}")
 
-        newCol = col_sep.reshape(-1, 1)
+        new_col = col_sep.reshape(-1, 1)
 
-        if separator == "IP" and (utilZ.colExist(S, newCol) or obj_sep <= nu + 10 ** (-5)):
+        if separator == "IP" and (utilZ.col_exist(S, new_col) or obj_sep <= nu + 10 ** (-5)):
             break
 
-        S = np.append(S, newCol, axis=1)
+        S = np.append(S, new_col, axis=1)
         num_rand_cols = 2 * (d - 1) ** 2 if run_mosek else d - 1
         S = new_rand_cols(S, num_rand_cols)
         S_mat = apply_pairs(S)
@@ -227,7 +237,7 @@ def colgen_general(S, apply_pairs, heuristic_fun, ip_func, new_rand_cols, primal
             v, weights, lastSolverTime = primal_solver(S_mat.T)
             info["Primal Solver"] += lastSolverTime
             # switch to mosek if increase was too small from previous iteration
-            # todo may need to add condition that value should be somewhat large before switching
+            # todo may need to add condition that value should be somewhat large before switching for levels to work properly
             run_mosek = (-v - value) / value < 0.000001
 
             value = -v
@@ -267,6 +277,6 @@ if __name__ == "__main__":
     k = 2 * d
     q = d // 3
 
-    logging.basicConfig(level=logging.INFO)
-    # print(colgen_ones_bound(d, k, q, solver="KNITRO"))
-    print(colgen_pairs(d, k, pairs=P, solver="Knitro"))
+    logging.basicConfig(level=logging.DEBUG)
+    # print(colgen_pairs(d, k, pairs=P, levels=True))
+    print(colgen_ones_bound(d, k, d // 3, solver="Knitro"))

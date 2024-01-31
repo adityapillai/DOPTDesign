@@ -1,12 +1,11 @@
 from gurobipy import *
 import numpy as np
 import time
+import logging
 
-import utilZ
 
-
-def colExist(S, newcol):
-    return np.all(newcol == S, axis=0).any()
+def col_exist(S, new_col):
+    return np.all(new_col == S, axis=0).any()
 
 
 # todo see if this can be made to work on 3d matrices as well
@@ -14,9 +13,9 @@ def random_p(S, p):
     d, k = S.shape
     S[1:, :] = 0
     numOnes = np.random.randint(low=0, high=p, size=k)
+    allRows = [np.random.choice(d - 1, numOnes[j], replace=False) + 1 for j in range(k)]
     for j in range(k):
-        rows = np.random.choice(np.arange(1, d), numOnes[j], replace=False)
-        S[rows, j] = 1
+        S[allRows[j], j] = 1
 
 
 def random_b(S):
@@ -27,7 +26,17 @@ def random_b(S):
 
 
 def random_l(S):
-    S[1:S.shape[0] + 1, :] = np.random.randint(low=0, high=3, size=(S.shape[0] - 1, S.shape[1]))
+    if S.ndim > 2:
+        S[:, 1:S.shape[1] + 1, :] = np.random.randint(low=0, high=3, size=(S.shape[0], S.shape[1] - 1, S.shape[2]))
+    else:
+        S[1:S.shape[0] + 1, :] = np.random.randint(low=0, high=3, size=(S.shape[0] - 1, S.shape[1]))
+
+
+def best_starting_sol(arr_s):
+    prods = arr_s @ np.transpose(arr_s, axes=(0, 2, 1))
+    values = np.linalg.det(prods)
+    max_idx = np.argmax(values)
+    return values[max_idx], max_idx
 
 
 def pairsMat(S, pairs):
@@ -46,10 +55,15 @@ def prod_constraint(m, a, b, c):
     m.addLConstr(c >= a + b - 1)
 
 
-def quadFormPairs(pairsS, x, pairs):
-    d = pairsS.shape[0] - len(pairs)
-    pairsX = pairsMat(x.reshape((d, 1)), pairs).reshape((d + len(pairs)))
-    return pairsX @ pairsS @ pairsX
+# finds matrix for all possible local moves when you swap a 0 and a 1 in the matrix
+def local_move_swap(x):
+    d, q = len(x), int(x.sum())
+    one_idx = np.where(x[1:] == 1)[0]
+    mod_I = (np.identity(d)[:, 1:])[:, one_idx]
+    mod_I = np.tile(mod_I, d - q)
+    zero_idx = np.where(x == 0)[0]
+    mod_I[np.repeat(zero_idx, q - 1), np.arange((d - q) * (q - 1))] = 1
+    return mod_I
 
 
 # pairsS, x, pairs, levels
@@ -58,10 +72,10 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
 
     mod_I = np.identity(d)[:, 1:]
 
-    # todo possibly add to mod_I columns with two ones corresponding ot places where there is a 1 and 0
-    if ones_bound is not None and x.sum() == ones_bound:
+    if ones_bound is not None and int(x.sum()) == ones_bound:
         indices = np.where(x[1:] == 0)[0]
         mod_I = np.delete(mod_I, indices, axis=1)
+        mod_I = np.append(mod_I, local_move_swap(x), axis=1)
 
     if levels:
         allChoices = np.concatenate([(x.reshape(-1, 1) + mod_I) % 3, (x.reshape(-1, 1) + 2 * mod_I) % 3], axis=1)
@@ -78,6 +92,7 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
 
 
 def localSearch(pairsS, P=None, levels=False, ones_bound=None):
+    # logger =  logging.getLogger(__name__)
     if P is None: P = []
     local_time = time.perf_counter()
     d = pairsS.shape[0] - len(P)
@@ -88,7 +103,7 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None):
     Y = np.random.randint(low=0, high=upper, size=(d, trials))
     Y[0, :] = 1
     if ones_bound is not None:
-        utilZ.random_p(Y, ones_bound)
+        random_p(Y, ones_bound)
 
     Y_pairs = pairsMat(Y, P) if len(P) else Y
 
@@ -98,8 +113,10 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None):
     x = Y[:, max_idx].ravel()
     currVal = vals[max_idx]
 
+    iter = 0
     while True:
         val, newVec = localMove(pairsS, x, P, levels, ones_bound)
+        iter += 1
 
         if val < currVal + 10 ** (-5):
             break
@@ -108,6 +125,7 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None):
         x = newVec
 
     local_time = time.perf_counter() - local_time
+    #logging.info(f"Heuristic took  {iter} iterations to finish")
     return currVal, x, local_time
 
 
@@ -198,7 +216,6 @@ def quadIP(S, onesBound=None, pairs=None, start=None):
         m.params.StartNumber = 0
         set_start(start, X, P, T, Q)
 
-    # m.ModelSense = -1
     m.Params.LogToConsole = 0
     m.optimize()
     time_IP = time.perf_counter() - time_IP
@@ -262,7 +279,6 @@ def set_start_two(m, start, X, B, PB, PX, TB, TX, QB, QX):
 def quadIP_two(S, pairs, start=None):
     time_IP = time.perf_counter()
     d = S.shape[0] - len(pairs)
-    # print(f"intially dim is {d}")
     m = Model()
 
     X = m.addVars(d, vtype='C', lb=0, ub=2)
