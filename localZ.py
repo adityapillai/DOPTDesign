@@ -5,6 +5,7 @@ from functools import partial
 import logging
 logger = logging.getLogger(__name__)
 
+import sys
 
 def general_local_alg(S, current_val, local_move_fun):
     iterations, ip_iter = 0, 0
@@ -160,6 +161,59 @@ def local_move(S, prev_value, ones_bound):
 
     return max_val, replace_index, add_vector, True
 
+def update_inverse(SS_inv,r,wZ,wZw):
+    Y  = SS_inv - (np.outer(wZ.T,wZ))/(1+wZw)
+    rY = r.T@Y
+    SS_inv_new = Y + (np.outer(rY.T,rY))/(1-np.dot(rY,r))
+    return SS_inv_new
+
+
+
+def update_logdet(SS_inv,r,Zr,idx,diff,obj_val):
+    w = r.copy()
+    w[idx] += diff
+    wZ = w.T@SS_inv
+    wZw = wZ@w
+    rZr = r.T@Zr
+    wZr = w.T@Zr
+    exp_new_val = (1+wZw)*(1 - rZr) + wZr**2
+    if exp_new_val >= 1:
+        return obj_val + np.log(exp_new_val),wZ,wZw
+    else:
+        return -np.inf,0,0
+    
+    
+
+def changeBit(S, ldet_S,ones_bound=None):
+    d, k = S.shape
+    if ones_bound is None:
+        ones_bound = d
+    flag,bit_change = True,False
+    swaps = 0
+    SS_inv = np.linalg.inv(S@S.T)
+    while flag:
+        flag = False
+        for i in range(k):
+            r = S[:,i].copy()
+            Zr = SS_inv@r
+            for j in range(1,d):
+                sji = S[j,i]
+                if sji == 1 or (sji == 0 and np.sum(S[:,i]) < ones_bound):
+                    if sji == 1:
+                        my_diff = -1
+                    else:
+                        my_diff = 1
+                    new_ldet,wZ,wZw = update_logdet(SS_inv,r,Zr,j,my_diff,ldet_S)
+                    if new_ldet > ldet_S:
+                        SS_inv = update_inverse(SS_inv,r,wZ,wZw)
+                        ldet_S = new_ldet
+                        S[j,i] += my_diff
+                        flag,bit_change = True,True
+                        swaps += 1
+                        break
+            if flag:
+                break
+    return S,ldet_S,swaps,bit_change
 
 def local_alg(k, d, ones_bound=None):
     info = {"F/s": (d - 1, k), "Total Time": time.perf_counter()}
@@ -176,6 +230,9 @@ def local_alg(k, d, ones_bound=None):
     current_val, max_idx = utilZ.best_starting_sol(arr_s)
     S = arr_s[max_idx]
 
+    ldet_S = np.linalg.slogdet(S@S.T)[1]
+    S,ldet_S,swaps,bit_change = changeBit(S, ldet_S)
+
     # could not find a non-zero starting solution
     if current_val < 10 ** (-3):
         logging.error(f"Could not find a non-zero starting solution among {trials} random solutions.")
@@ -191,6 +248,8 @@ def local_alg(k, d, ones_bound=None):
     info["Iterations"] = iterations
     info["Final Value"] = np.log(current_val)
     return info #, vals, sep_ip
+
+
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import program
 import numpy as np
 import time
 import mosek
-import pyipopt
+#import pyipopt
 import pyknitro
 from collections import defaultdict
 from functools import partial
