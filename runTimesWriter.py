@@ -19,16 +19,21 @@ def pairs_alg(d_vals, k_vals, pairs, local, solver):
     return pd.DataFrame(dics)
 
 
-d_ranges = np.arange(25,26) #41)
+# d_ranges = np.arange(25,41)
+# k_ranges = 2 * d_ranges
+# p_ranges = d_ranges
+
+d_ranges = np.arange(11,25)
+#d_ranges = np.arange(11,32)
 k_ranges = 2 * d_ranges
-p_ranges = d_ranges #// 3
+p_ranges = d_ranges // 3
 
 Pairs = [(1, 3), (4, 5), (6, 14), (8, 17)]
 
-# df_ones = ones_alg(d_ranges, k_ranges, p_ranges, False, solver="Knitro")
-# df_ones.to_csv("Data/Ones-CG-v5.csv", index=False)
+#df_ones = ones_alg(d_ranges, k_ranges, p_ranges, False, solver="Knitro")
+#df_ones.to_csv("Data/Ones-CG-020424.csv", index=False)
 df_ones_local = ones_alg(d_ranges, k_ranges, p_ranges, True, solver="Knitro")
-df_ones_local.to_csv("Data/Ones-LS-v5.csv", index=False)
+df_ones_local.to_csv("Data/Ones-LS-020424-gd_free.csv", index=False)
 
 # df_pairs = pairs_alg(d_ranges, k_ranges, Pairs, False, solver="Knitro")
 # df_pairs.to_csv("Data/Pairs-CG-v5.csv", index=False)
