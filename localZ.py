@@ -8,29 +8,31 @@ logger = logging.getLogger(__name__)
 
 def general_local_alg(S, current_val, local_move_fun):
     iterations, ip_iter = 0, 0
-    logging.info(f"Iteration 0, value {np.log(current_val):.5f}")
-    #vals = [current_val]
-    #sep_IP = []
+    logging.info(f"Iteration 0, value {(current_val):.5f}")
+    # vals = [current_val]
+    # sep_IP = []
     while True:
-        new_val, replace_index, new_vec, solved_ip = local_move_fun(S, current_val)
-        #vals.append(new_val)
-        #sep_IP.append(solved_ip)
-        solve = "IP" if solved_ip else "heuristic"
+        new_ratio, replace_index, new_vec, solved_ip = local_move_fun(S, current_val)
         iterations += 1
-        logging.info(f"Iteration {iterations}, value {np.log(new_val):.5f}, used {solve}")
         ip_iter += int(solved_ip)
-        if new_val - current_val < 10 ** (-5):
-            break
-        current_val = new_val
-        S[:, replace_index] = new_vec
 
-    return current_val, iterations, ip_iter #, np.array(vals), np.array(sep_IP)
+        solve = "IP" if solved_ip else "heuristic"
+        logging.info(f"Iteration {iterations}, value {(current_val + np.log(new_ratio)):.5f}, used {solve}")
+
+        if solved_ip and new_ratio < 1 + 10 ** (-3):
+            break
+
+        S[:, replace_index] = new_vec
+        current_val += np.log(new_ratio)
+
+
+    return S, current_val, iterations, ip_iter
 
 
 def local_move_pairs(S, old_val, levels, Pairs):
     d, k = S.shape
     # starting point
-    pm = utilZ.pairsMat(S, Pairs)
+    pm = utilZ.pairs_mat(S, Pairs)
 
     pmpm = pm @ pm.T
 
@@ -90,7 +92,7 @@ def local_alg_pairs(k, d, pairs, levels=False):
         utilZ.random_b(arr_s)
     else:
         utilZ.random_l(arr_s)
-    arr_s_pairs = np.array([utilZ.pairsMat(S, pairs) for S in arr_s])
+    arr_s_pairs = np.array([utilZ.pairs_mat(S, pairs) for S in arr_s])
     current_val, max_idx = utilZ.best_starting_sol(arr_s_pairs)
     S = arr_s[max_idx]
 
@@ -100,7 +102,7 @@ def local_alg_pairs(k, d, pairs, levels=False):
 
     fun = partial(local_move_pairs, levels=levels, Pairs=pairs)
 
-    current_val, iterations, ip_iter = general_local_alg(S, current_val, fun)
+    S,current_val, iterations, ip_iter = general_local_alg(S, current_val, fun)
 
     info["Final Value"] = np.log(current_val)
     info["IP Iterations"] = ip_iter
@@ -112,85 +114,133 @@ def local_alg_pairs(k, d, pairs, levels=False):
 def local_move(S, prev_value, ones_bound):
     d, k = S.shape
     SS = S @ S.T
-    dS = np.linalg.det(SS)
-    S_inv = np.linalg.inv(SS)
+    # dS = np.exp(prev_value)
+    # print(f"vals are {prev_value} {np.linalg.slogdet(S @ S.T)[1]}")
+    S_inv = np.linalg.inv(S @ S.T)
 
     denominators = 1 - (S.T.dot(S_inv) * S.T).sum(axis=1)
+    multiples = 1 - (S.T.dot(S_inv) * S.T).sum(axis=1)
     replace_index, add_vector, max_val = 0, 0, 0
     ip_inputs = []
+
+    best_ratio = 0
+    all_tmp = np.einsum('ij,ik->ijk', S.T, S.T)
+    all_Ri = SS - all_tmp
+    all_dRi = multiples
+    all_dRi[np.isclose(all_dRi, 0)] = 0
+    all_QM = S_inv + (S_inv @ all_tmp @ S_inv) / np.repeat(denominators, d * d).reshape(k, d, d)
+
     for i in range(k):
-        c = S[:, i].reshape(-1, 1)
-        tmp = c @ c.T
+        dRi = all_dRi[i]  # np.linalg.det(Ri) if denominators[i] > 10 ** (-3) else 0
+        c = S[:, i]
+        QM = all_QM[i] if dRi else np.eye(d) - np.linalg.pinv(all_Ri[i], hermitian=True) @ all_Ri[i]
 
-        Ri = SS - tmp
-        dRi = np.linalg.det(Ri) if denominators[i] > 10 ** (-3) else 0
-
-        c = c.ravel()
-        QM = S_inv + (S_inv @ tmp @ S_inv) / denominators[i] if dRi else -np.linalg.pinv(Ri, hermitian=True) @ Ri
-
-        if not dRi:
-            ip_inputs.append((QM, dRi, None))
-            continue
+        # eval_func = lambda v: multiples[i] * (1 + v @ QM @ v) if dRi else (lambda x: (x @ QM @ x) / (c @ QM @ c))
+        # dRi * (1 + v @ QM @ v) if dRi else lambda v: (dS / (c @ QM @ c)) * (v @ QM @ v)
 
         # use local first if all of them fail then solve IP
-        sol_val, vec, t = utilZ.localSearch(QM, ones_bound=ones_bound)
+        sol_val, vec, t = utilZ.localSearch(QM, ones_bound=ones_bound, curr_vec=c)
         ip_inputs.append((QM, dRi, vec))
 
-        current_val = dRi * (1 + sol_val) if dRi else (dS / (c @ c + c @ QM @ c)) * (vec @ vec + sol_val)
+        current_ratio = multiples[i] * (1 + sol_val) if dRi else sol_val / (c @ QM @ c)
 
-        if current_val > max_val:
+        if current_ratio > best_ratio:
             replace_index = i
             add_vector = vec
-            max_val = current_val
+            best_ratio = current_ratio
+            # max_val = prev_value + np.log(current_ratio)
+        if best_ratio >= 1 + 10 ** (-2):
+            break
 
-    if max_val > prev_value:
-        return max_val, replace_index, add_vector, False
+    if best_ratio >= 1 + 10 ** (-3):
+        return best_ratio, replace_index, add_vector, False
 
     for i in range(k):
         QM, dRi, vec = ip_inputs[i]
         sol_val, vec, t = utilZ.quadIP(QM, start=vec, onesBound=ones_bound)
 
         c = S[:, i]
-        current_val = dRi * (1 + sol_val) if dRi else (dS / (c @ c + c @ QM @ c)) * (vec @ vec + sol_val)
+        current_ratio = multiples[i] * (1 + sol_val) if dRi else sol_val / (
+                c @ QM @ c)  # dRi * (1 + sol_val) if dRi else (dS / (c @ QM @ c)) * (vec @ vec + sol_val)
 
-        if current_val > max_val:
+        if current_ratio > best_ratio:
             replace_index = i
             add_vector = vec
-            max_val = current_val
+            best_ratio = current_ratio
 
-    return max_val, replace_index, add_vector, True
+        if best_ratio >= 1 + 10 ** (-3):
+            break
+
+    return best_ratio, replace_index, add_vector, True
 
 
-def local_alg(k, d, ones_bound=None):
-    info = {"F/s": (d - 1, k), "Total Time": time.perf_counter()}
 
-    trials = 50
-    arr_s = np.ones((trials, d, k))
+
+
+def reduceDimension(S, k):
+    # local_move_fun = partial(local_move, ones_bound=ones_bound)
+    start_timer = time.perf_counter()
+    d, nmax = S.shape
+    # new_arr_s, ldet_arr_s = np.zeros((len(arr_s), d, k)), np.zeros(len(arr_s))
+
+    SS = S @ S.T
+    SS_inv = np.linalg.inv(SS)
+    ldet_S = np.linalg.slogdet(SS)[1]
+
+    for l in range(nmax - k):
+        # vectorized version
+        # for all columns c of S, get c @ SS_inv @ c
+        all_cZc = (S.T.dot(SS_inv) * S.T).sum(axis=1)
+        all_newldet = np.log(1 - all_cZc) + ldet_S
+
+        best_remove_idx = np.argmax(all_newldet)
+        best_cZc = all_cZc[best_remove_idx]
+        SS_inv += (1 / (1 - best_cZc)) * SS_inv @ np.outer(S[:, best_remove_idx], S[:, best_remove_idx]) @ SS_inv
+
+        S = np.delete(S, best_remove_idx, axis=1)
+        ldet_S = all_newldet[best_remove_idx]
+
+    return S, ldet_S, time.perf_counter() - start_timer
+    
+
+
+def local_alg(k, d, ones_bound=None, seed=None, starting_S=None):
+    info = {"d": d, "Total Time": time.perf_counter()}
+    #print(f"starting {d}")
+
+    S = np.ones((d, 10 * k))
 
     if ones_bound is None:
-        utilZ.random_b(arr_s)
+        utilZ.random_b(S, seed=seed)
     else:
-        for S in arr_s: utilZ.random_p(S, ones_bound)
+        utilZ.random_p(S, ones_bound, seed=seed)
         info["Ones Bound"] = ones_bound
 
-    current_val, max_idx = utilZ.best_starting_sol(arr_s)
-    S = arr_s[max_idx]
+    init_time = 0
+    if starting_S is not None:
+        S = starting_S
+        ldet_init = np.linalg.slogdet(S @ S.T)[1]
+    else:
+        S, ldet_init, init_time = reduceDimension(S, k)
 
-    # could not find a non-zero starting solution
-    if current_val < 10 ** (-3):
-        logging.error(f"Could not find a non-zero starting solution among {trials} random solutions.")
+    if np.isclose(ldet_init, 0):
+        logging.error(f"Could not find a non-zero starting solution random solutions.")
         return None
 
-    fun = partial(local_move, ones_bound=ones_bound)
-    current_val, iterations, ip_iter = general_local_alg(S, current_val, fun)
+    local_move_fun = partial(local_move, ones_bound=ones_bound)
+    S, current_val, iterations, ip_iter = general_local_alg(S, ldet_init, local_move_fun)
+    # print(ldet_init)
 
-    #, vals, sep_ip
-
+    # could not find a non-zero starting solution
+    info["Gurobi"] = ip_iter
     info["Total Time"] = time.perf_counter() - info["Total Time"]
-    info["IP Iterations"] = ip_iter
     info["Iterations"] = iterations
-    info["Final Value"] = np.log(current_val)
-    return info #, vals, sep_ip
+    info["Initialization Time"] = init_time
+    info["init_objval"] = ldet_init
+    info["Final Value"] = current_val
+    return info
+
+
 
 
 if __name__ == "__main__":
@@ -207,6 +257,7 @@ if __name__ == "__main__":
 
 
     info = local_alg(k, d, d // 3)
+    print(info)
 
     # plt.plot( )
 

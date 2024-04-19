@@ -9,20 +9,23 @@ def col_exist(S, new_col):
 
 
 # todo see if this can be made to work on 3d matrices as well
-def random_p(S, p):
+def random_p(S, p, seed=None):
     d, k = S.shape
+    rng = np.random.default_rng(seed=seed)
     S[1:, :] = 0
-    numOnes = np.random.randint(low=0, high=p, size=k)
-    allRows = [np.random.choice(d - 1, numOnes[j], replace=False) + 1 for j in range(k)]
-    for j in range(k):
-        S[allRows[j], j] = 1
+    numOnes = rng.integers(low=0, high=p, size=k)
+    allRows = [rng.choice(d - 1, numOnes[j], replace=False) + 1 for j in range(k)]
+    S[np.concatenate(allRows), np.repeat(np.arange(k), numOnes)] = 1
+    # for j in range(k):
+    #    S[allRows[j], j] = 1
 
 
-def random_b(S):
+def random_b(S, seed=None):
+    rng = np.random.default_rng(seed=seed)
     if S.ndim > 2:
-        S[:, 1:S.shape[1] + 1, :] = np.random.binomial(n=1, p=1 / 2, size=(S.shape[0], S.shape[1] - 1, S.shape[2]))
+        S[:, 1:S.shape[1] + 1, :] = rng.integers(low=0, high=2, size=(S.shape[0], S.shape[1] - 1, S.shape[2]))
     else:
-        S[1:S.shape[0] + 1, :] = np.random.binomial(n=1, p=1 / 2, size=(S.shape[0] - 1, S.shape[1]))
+        S[1:S.shape[0] + 1, :] = rng.integers(low=0, high=2, size=(S.shape[0] - 1, S.shape[1]))
 
 
 def random_l(S):
@@ -39,7 +42,7 @@ def best_starting_sol(arr_s):
     return values[max_idx], max_idx
 
 
-def pairsMat(S, pairs):
+def pairs_mat(S, pairs):
     newMat = np.zeros((len(pairs), S.shape[1]))
 
     for col in range(newMat.shape[1]):
@@ -82,7 +85,7 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
     else:
         allChoices = (x.reshape(-1, 1) + mod_I) % 2
 
-    allChoices_pairs = pairsMat(allChoices, pairs) if len(pairs) else allChoices
+    allChoices_pairs = pairs_mat(allChoices, pairs) if len(pairs) else allChoices
 
     vals = (allChoices_pairs.T.dot(pairsS) * allChoices_pairs.T).sum(axis=1)
     max_idx = np.argmax(vals)
@@ -91,7 +94,7 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
     return max_val, (allChoices[:, max_idx]).flatten()
 
 
-def localSearch(pairsS, P=None, levels=False, ones_bound=None):
+def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None):
     # logger =  logging.getLogger(__name__)
     if P is None: P = []
     local_time = time.perf_counter()
@@ -99,33 +102,35 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None):
 
     upper = 3 if levels else 2
 
-    trials = 100
-    Y = np.random.randint(low=0, high=upper, size=(d, trials))
+    trials = 100 #0 + int(curr_vec is not None)
+
+    Y = np.random.randint(low=0, high=upper, size=(d, trials)) if curr_vec is None else curr_vec.reshape(-1, 1)
     Y[0, :] = 1
-    if ones_bound is not None:
+
+    if ones_bound is not None and curr_vec is None:
         random_p(Y, ones_bound)
 
-    Y_pairs = pairsMat(Y, P) if len(P) else Y
+    Y_pairs = pairs_mat(Y, P) if P else Y
 
-    # get all y^T pairsS y for all columns y of Y_pairs
     vals = (Y_pairs.T.dot(pairsS) * Y_pairs.T).sum(axis=1)
     max_idx = np.argmax(vals)
     x = Y[:, max_idx].ravel()
     currVal = vals[max_idx]
 
     iter = 0
+    #print(f"starting with value {currVal} max idx was {max_idx}")
     while True:
         val, newVec = localMove(pairsS, x, P, levels, ones_bound)
         iter += 1
 
-        if val < currVal + 10 ** (-5):
+        if val - currVal < 10 ** (-5):
             break
 
         currVal = val
         x = newVec
 
+
     local_time = time.perf_counter() - local_time
-    #logging.info(f"Heuristic took  {iter} iterations to finish")
     return currVal, x, local_time
 
 
