@@ -114,7 +114,7 @@ def colgen_dual(d, k):
 def colgen_pairs(d, k, pairs, levels=False, solver="IPOPT"):
     logging.info(f"Running column generation for {d=},{k=},{len(pairs)} pairs with {solver=}")
     info = {"F/s": (d - 1, k), "Pairs": pairs}
-    apply_pairs = partial(utilZ.pairsMat, pairs=pairs)
+    apply_pairs = partial(utilZ.pairs_mat, pairs=pairs)
     heuristic_ones = partial(utilZ.localSearch, P=pairs, levels=levels)
     ip_func = partial(utilZ.quadIP, pairs=pairs) if not levels else partial(utilZ.quadIP_two, pairs=pairs)
     rand_func = new_random_cols_levels if levels else new_random_cols

@@ -3,7 +3,6 @@ import numpy as np
 import time
 from functools import partial
 import logging
-import pandas as pd
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +32,7 @@ def general_local_alg(S, current_val, local_move_fun):
 def local_move_pairs(S, old_val, levels, Pairs):
     d, k = S.shape
     # starting point
-    pm = utilZ.pairsMat(S, Pairs)
+    pm = utilZ.pairs_mat(S, Pairs)
 
     pmpm = pm @ pm.T
 
@@ -93,7 +92,7 @@ def local_alg_pairs(k, d, pairs, levels=False):
         utilZ.random_b(arr_s)
     else:
         utilZ.random_l(arr_s)
-    arr_s_pairs = np.array([utilZ.pairsMat(S, pairs) for S in arr_s])
+    arr_s_pairs = np.array([utilZ.pairs_mat(S, pairs) for S in arr_s])
     current_val, max_idx = utilZ.best_starting_sol(arr_s_pairs)
     S = arr_s[max_idx]
 
@@ -207,7 +206,7 @@ def reduceDimension(S, k):
 
 def local_alg(k, d, ones_bound=None, seed=None, starting_S=None):
     info = {"d": d, "Total Time": time.perf_counter()}
-    print(f"starting {d}")
+    #print(f"starting {d}")
 
     S = np.ones((d, 10 * k))
 
@@ -224,8 +223,8 @@ def local_alg(k, d, ones_bound=None, seed=None, starting_S=None):
     else:
         S, ldet_init, init_time = reduceDimension(S, k)
 
-    if ldet_init < 10 ** (-3):
-        logging.error(f"Could not find a non-zero starting solution among {trials} random solutions.")
+    if np.isclose(ldet_init, 0):
+        logging.error(f"Could not find a non-zero starting solution random solutions.")
         return None
 
     local_move_fun = partial(local_move, ones_bound=ones_bound)
@@ -258,6 +257,7 @@ if __name__ == "__main__":
 
 
     info = local_alg(k, d, d // 3)
+    print(info)
 
     # plt.plot( )
 
