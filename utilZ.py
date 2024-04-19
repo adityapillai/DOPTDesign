@@ -9,7 +9,7 @@ def col_exist(S, new_col):
 
 
 # todo see if this can be made to work on 3d matrices as well
-def random_p(S, p):
+def random_p(S, p, seed = None):
     d, k = S.shape
     S[1:, :] = 0
     numOnes = np.random.randint(low=0, high=p, size=k)
@@ -18,7 +18,7 @@ def random_p(S, p):
         S[allRows[j], j] = 1
 
 
-def random_b(S):
+def random_b(S, seed = None):
     if S.ndim > 2:
         S[:, 1:S.shape[1] + 1, :] = np.random.binomial(n=1, p=1 / 2, size=(S.shape[0], S.shape[1] - 1, S.shape[2]))
     else:
@@ -91,7 +91,7 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
     return max_val, (allChoices[:, max_idx]).flatten()
 
 
-def localSearch(pairsS, P=None, levels=False, ones_bound=None):
+def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None):
     # logger =  logging.getLogger(__name__)
     if P is None: P = []
     local_time = time.perf_counter()
