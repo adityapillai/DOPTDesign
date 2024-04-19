@@ -162,7 +162,6 @@ def colgen_ones_bound(d, k, ones_bound, solver="IPOPT"):
         primal_solver_ones = partial(pyknitro.run_knitro, s=k)
 
     # get a non-zero starting solution
-    # todo change to get best of 50 random, log error and return
     trials = 50
     arr_s = np.ones((trials, d, k))
     for S in arr_s:
