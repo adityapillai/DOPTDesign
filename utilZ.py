@@ -53,9 +53,9 @@ def pairs_mat(S, pairs):
 
 
 def prod_constraint(m, a, b, c):
-    m.addLConstr(c <= a)
-    m.addLConstr(c <= b)
-    m.addLConstr(c >= a + b - 1)
+    m.addConstr(c <= a)
+    m.addConstr(c <= b)
+    m.addConstr(c >= a + b - 1)
 
 
 # finds matrix for all possible local moves when you swap a 0 and a 1 in the matrix
@@ -70,7 +70,7 @@ def local_move_swap(x):
 
 
 # pairsS, x, pairs, levels
-def localMove(pairsS, x, pairs, levels, ones_bound):
+def localMove(pairsS, x, pairs, levels, ones_bound, A, b):
     d = len(x)
 
     mod_I = np.identity(d)[:, 1:]
@@ -85,6 +85,14 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
     else:
         allChoices = (x.reshape(-1, 1) + mod_I) % 2
 
+    if A is not None:
+        infeasible = np.where(np.any(A @ allChoices > b.reshape(-1, 1), axis=0))[0]
+        #print(f"{len(infeasible)}")
+        if len(infeasible) == len(allChoices):
+            #print("no flips are feasible")
+            return -np.inf, x
+        allChoices = np.delete(allChoices, infeasible, axis=1)
+
     allChoices_pairs = pairs_mat(allChoices, pairs) if len(pairs) else allChoices
 
     vals = (allChoices_pairs.T.dot(pairsS) * allChoices_pairs.T).sum(axis=1)
@@ -94,7 +102,7 @@ def localMove(pairsS, x, pairs, levels, ones_bound):
     return max_val, (allChoices[:, max_idx]).flatten()
 
 
-def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None):
+def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None, A=None, b=None):
     # logger =  logging.getLogger(__name__)
     if P is None: P = []
     local_time = time.perf_counter()
@@ -102,7 +110,7 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None):
 
     upper = 3 if levels else 2
 
-    trials = 100 #0 + int(curr_vec is not None)
+    trials = 100  # 0 + int(curr_vec is not None)
 
     Y = np.random.randint(low=0, high=upper, size=(d, trials)) if curr_vec is None else curr_vec.reshape(-1, 1)
     Y[0, :] = 1
@@ -118,9 +126,9 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None):
     currVal = vals[max_idx]
 
     iter = 0
-    #print(f"starting with value {currVal} max idx was {max_idx}")
+    # print(f"starting with value {currVal} max idx was {max_idx}")
     while True:
-        val, newVec = localMove(pairsS, x, P, levels, ones_bound)
+        val, newVec = localMove(pairsS, x, P, levels, ones_bound, A, b)
         iter += 1
 
         if val - currVal < 10 ** (-5):
@@ -128,7 +136,6 @@ def localSearch(pairsS, P=None, levels=False, ones_bound=None, curr_vec=None):
 
         currVal = val
         x = newVec
-
 
     local_time = time.perf_counter() - local_time
     return currVal, x, local_time
@@ -157,9 +164,11 @@ def sparsify(S, W, k):
     return [newW[i].x for i in range(s)] if m.status == GRB.OPTIMAL else []
 
 
+
+
 # maximize x^T A x for x binary and A symmetric
 # and first coordinate of x is 1
-def quadIP(S, onesBound=None, pairs=None, start=None):
+def quadIP(S, onesBound=None, pairs=None, start=None, A=None, b=None):
     if pairs is None: pairs = []
     time_IP = time.perf_counter()
     d = S.shape[0] - len(pairs)
@@ -167,7 +176,7 @@ def quadIP(S, onesBound=None, pairs=None, start=None):
 
     ind = [(i, j) for i in range(d) for j in range(i + 1, d)]
     l = tuplelist(ind)
-    X = m.addVars(d, vtype=GRB.BINARY)
+    X = m.addMVar(d, vtype=GRB.BINARY) #m.addVars(d, vtype=GRB.BINARY)
     #  obj = S.diagonal()
     # pairs
     P = m.addVars(l, vtype='C', lb=0, ub=1)
@@ -180,26 +189,33 @@ def quadIP(S, onesBound=None, pairs=None, start=None):
                 range(i + 1, len(pairs))]
         Q = m.addVars(tuplelist(qind), vtype='C', lb=0, ub=1)
 
-    m.addConstr(X[0] == 1)
+    X[0].lb = 1
 
     for i, j in P:
+        #m.addConstr(P[i, j] >= X[i] + X[j] -1)
         prod_constraint(m, X[i], X[j], P[i, j])
 
+    # todo try other constraints for linearizing next two loops
     for i, j, k in T:
         if i == j or i == k:
             m.addLConstr(T[i, j, k] == P[j, k])
         else:
-            prod_constraint(m, X[i], P[j, k], T[i, j, k])
+            m.addLConstr(T[i, j, k] >= X[i] + X[j] + X[k] - 2)
+            # prod_constraint(m, X[i], P[j, k], T[i, j, k])
 
+    # todo fix these before tunning with pairs
     for i, j, k, l in Q:
         if i == k:
             m.addLConstr(Q[i, j, k, l] == T[j, k, l])
         elif j == l:
             m.addLConstr(Q[i, j, k, l] == T[i, k, l])
         else:
-            prod_constraint(m, P[i, j], P[k, l], Q[i, j, k, l])
+            # prod_constraint(m, P[i, j], P[k, l], Q[i, j, k, l])
+            m.addLConstr(Q[i, j, k, l] >= X[i] + X[j] + X[k] + X[l] - 3)
 
-    obj = S.diagonal() @ np.array([X[i] for i in X] + [P[i, j] for i, j in pairs]) + quicksum(
+    # todo use np.triu with offset and inner product for third term
+    #print(S.diagonal()[:d].shape)
+    obj = S.diagonal()[:d] @ X + S.diagonal()[d:] @ np.array([P[i, j] for i, j in pairs]) + quicksum(
         [2 * P[i, j] * S[i, j] for i, j in P])
 
     for i in range(d):
@@ -221,17 +237,22 @@ def quadIP(S, onesBound=None, pairs=None, start=None):
         m.params.StartNumber = 0
         set_start(start, X, P, T, Q)
 
+    #print(f"shapes {A.shape} {X.shape}")
+    if A is not None:
+        m.addConstr(A @ X <= b)
+        #m.addMConstr(A, [X[i] for i in X], "<=", b)
+
     m.Params.LogToConsole = 0
     m.optimize()
-    time_IP = time.perf_counter() - time_IP
 
-    sol = np.array([int(X[j].x) for j in range(d)])
+    sol = X.x.astype(int)  #np.array([int(X[j].x) for j in range(d)])
 
-    return m.getObjective().getValue(), sol, time_IP
+    return m.getObjective().getValue(), sol, time.perf_counter() - time_IP
 
 
 def set_start(start, X, P, T, Q):
-    for i in X:
+    d = len(start)
+    for i in range(d):
         X[i].Start = start[i]
 
     for i, j in P:
